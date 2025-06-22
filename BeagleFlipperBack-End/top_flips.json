@@ -1,0 +1,122 @@
+[
+  {
+    "name": "Atlatl dart",
+    "margin": 4,
+    "qty": 44000,
+    "profit": 176000
+  },
+  {
+    "name": "Chaos rune",
+    "margin": 1,
+    "qty": 133317,
+    "profit": 133317
+  },
+  {
+    "name": "Gold ore",
+    "margin": 2,
+    "qty": 60000,
+    "profit": 120000
+  },
+  {
+    "name": "Steel bar",
+    "margin": 3,
+    "qty": 34419,
+    "profit": 103257
+  },
+  {
+    "name": "Astral rune",
+    "margin": 2,
+    "qty": 50000,
+    "profit": 100000
+  },
+  {
+    "name": "Adamant bolts",
+    "margin": 2,
+    "qty": 44000,
+    "profit": 88000
+  },
+  {
+    "name": "Rune arrow",
+    "margin": 2,
+    "qty": 37994,
+    "profit": 75988
+  },
+  {
+    "name": "Law rune",
+    "margin": 1,
+    "qty": 72000,
+    "profit": 72000
+  },
+  {
+    "name": "Cannonball",
+    "margin": 1,
+    "qty": 71879,
+    "profit": 71879
+  },
+  {
+    "name": "Adamant dart",
+    "margin": 1,
+    "qty": 55000,
+    "profit": 55000
+  },
+  {
+    "name": "Lava rune",
+    "margin": 1,
+    "qty": 52067,
+    "profit": 52067
+  },
+  {
+    "name": "Looting bag note",
+    "margin": 1433,
+    "qty": 32,
+    "profit": 45856
+  },
+  {
+    "name": "Amethyst dart",
+    "margin": 1,
+    "qty": 32368,
+    "profit": 32368
+  },
+  {
+    "name": "Amethyst arrow",
+    "margin": 6,
+    "qty": 2905,
+    "profit": 17430
+  },
+  {
+    "name": "Black d'hide body",
+    "margin": 170,
+    "qty": 70,
+    "profit": 11900
+  },
+  {
+    "name": "Unpowered orb",
+    "margin": 1,
+    "qty": 7132,
+    "profit": 7132
+  },
+  {
+    "name": "Crushed nest",
+    "margin": 25,
+    "qty": 261,
+    "profit": 6525
+  },
+  {
+    "name": "Tarromin potion (unf)",
+    "margin": 21,
+    "qty": 270,
+    "profit": 5670
+  },
+  {
+    "name": "Blighted ancient ice sack",
+    "margin": 1,
+    "qty": 4348,
+    "profit": 4348
+  },
+  {
+    "name": "Red d'hide body",
+    "margin": 57,
+    "qty": 70,
+    "profit": 3990
+  }
+]

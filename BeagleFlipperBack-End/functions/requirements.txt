@@ -1,0 +1,5 @@
+firebase-functions
+firebase-admin
+pandas
+scikit-learn
+lightgbm
