@@ -1,0 +1,18 @@
+# IDE specific files
+.idea/
+
+# Python virtual environment
+venv/
+
+# Secret Keys (This is the important one for your error)
+serviceAccountKey.json
+
+# Node.js dependencies (Good for front-end projects)
+node_modules/
+
+# Build folders
+build/
+dist/
+
+# Gradle cache
+.gradle/
