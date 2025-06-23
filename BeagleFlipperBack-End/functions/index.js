@@ -1,27 +1,34 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
+
+// Import centralized configuration
 const config = require('./tradingConfig');
+
+// Import functions from your working files
 const { handleProfitTracking, handleLoadFlips } = require('./tradingLogic');
 const { handleLogin, handleRefreshToken, authenticateRequest } = require('./auth');
-const { getHybridSuggestionList, getPriceSuggestion } = require('./hybridAnalytics'); // Note: Changed to get list
-const { getEightHourSuggestionList } = require('./eightHourStrategy'); // Note: Changed to get list
-const { SuggestionEngine } = require('./suggestionEngine');
+const { getHybridSuggestion, getPriceSuggestion } = require('./hybridAnalytics');
+const { getEightHourSuggestion } = require('./eightHourStrategy');
 
+
+// Initialize Firebase Admin SDK
 admin.initializeApp();
 const db = admin.firestore();
 
-// --- Initialize the single "brain" instance and have it learn from history ---
-const suggestionEngine = new SuggestionEngine(db, config);
-suggestionEngine.initialize().catch(err => console.error("FATAL: Could not initialize suggestion engine on startup.", err));
+// --- NEW: Short-term memory for the Skip button ---
+// This list will hold item IDs that have been suggested recently.
+let recentlySuggested = new Set();
+// Clear the list every 5 minutes to prevent it from getting stuck if the user leaves.
+setInterval(() => {
+    if (recentlySuggested.size > 0) {
+        console.log("[Memory] Clearing recently suggested list due to timeout.");
+        recentlySuggested.clear();
+    }
+}, 300000);
 // ---
 
-// --- State for Backend-Only Smart Skip ---
-let suggestionQueue = [];
-let lastServedSuggestion = null;
-let lastRefreshTime = 0;
-// ---
-
+// Set global options for all functions
 setGlobalOptions({
     region: "europe-west2",
     timeoutSeconds: config.TRADING_CONFIG.SUGGESTION_POLL_INTERVAL_SECONDS * 2 || 300
@@ -37,20 +44,16 @@ async function handleSignup(req, res) {
     return res.status(201).json({ message: "User created successfully", uid: userRecord.uid });
   } catch (error) {
     let message = "Failed to create user.";
-    if (error.code === 'auth/email-already-exists') { message = "This email address is already in use."; }
-    else if (error.code === 'auth/weak-password') { message = "Password must be at least 6 characters long."; }
+    if (error.code === 'auth/email-already-exists') {
+      message = "This email address is already in use.";
+    } else if (error.code === 'auth/weak-password') {
+      message = "Password must be at least 6 characters long.";
+    }
     return res.status(400).json({ message });
   }
 }
 
-function formatSuggestion(suggestion) {
-    const defaultSuggestion = { type: "wait", message: "No suggestions available.", item_name: "None", item_id: 0 };
-    if (!suggestion) return defaultSuggestion;
-    const formatted = { ...defaultSuggestion, ...suggestion };
-    if (!formatted.item_name && formatted.name) formatted.item_name = formatted.name;
-    return formatted;
-}
-
+// Main API endpoint
 exports.api = onRequest({ cors: true }, async (req, res) => {
     if (req.method === 'OPTIONS') {
         res.set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -59,54 +62,54 @@ exports.api = onRequest({ cors: true }, async (req, res) => {
         return res.status(204).send('');
     }
     res.set('Access-Control-Allow-Origin', '*');
-    if (req.path === "/login") { return handleLogin(req, res, db); }
-    if (req.path === "/signup") { return handleSignup(req, res); }
-    if (req.path === "/refresh-token") { return handleRefreshToken(req, res); }
+
+    if (req.path === "/login") {
+        return handleLogin(req, res, db);
+    }
+    if (req.path === "/signup") {
+        return handleSignup(req, res);
+    }
+    if (req.path === "/refresh-token") {
+        return handleRefreshToken(req, res);
+    }
 
     return authenticateRequest(req, res, async () => {
+        const displayName = req.body.display_name || req.query.display_name || (req.user ? req.user.displayName : null);
+
         switch (req.path) {
             case "/suggestion":
-                const body = req.body;
-                const displayName = body.display_name;
+                // Add the list of recently suggested items to the request body
+                // so the suggestion functions can filter them out.
+                req.body.recently_suggested = Array.from(recentlySuggested);
+
                 if (!displayName) {
-                    return res.status(400).json({ message: "Display name is required in the request body for suggestions." });
+                    return res.status(400).json({ message: "Display name is required for suggestions." });
                 }
+                const timeframe = req.body.timeframe || 5;
+                let suggestion;
 
-                const userState = { inventory: body.inventory || [], offers: body.offers || [] };
-                const timeframe = body.timeframe || 5;
-                const now = Date.now();
-                const isStale = (now - lastRefreshTime) > 20000; // Queue is stale after 20 seconds
-
-                let nextSuggestion = null;
-
-                if (isStale || suggestionQueue.length === 0) {
-                    console.log("--- Refreshing Suggestion Queue ---");
-                    lastRefreshTime = now;
-                    await suggestionEngine.run();
-
-                    suggestionQueue = (timeframe === 480)
-                        ? await getEightHourSuggestionList(userState, db, displayName, timeframe)
-                        : await getHybridSuggestionList(userState, db, displayName, timeframe);
-
-                    nextSuggestion = suggestionQueue.length > 0 ? suggestionQueue[0] : null;
-
+                if (timeframe === 480) {
+                    suggestion = await getEightHourSuggestion(req.body, db, displayName, timeframe);
                 } else {
-                    console.log("--- Queue is fresh. Interpreting as Skip request. ---");
-                    let currentIndex = -1;
-                    if (lastServedSuggestion && lastServedSuggestion.item_id) {
-                        currentIndex = suggestionQueue.findIndex(s => s.item_id === lastServedSuggestion.item_id);
-                    }
-
-                    const nextIndex = (currentIndex === -1 || currentIndex + 1 >= suggestionQueue.length) ? 0 : nextIndex = currentIndex + 1;
-                    nextSuggestion = suggestionQueue[nextIndex] || suggestionQueue[0] || null;
+                    suggestion = await getHybridSuggestion(req.body, db, displayName, timeframe);
                 }
 
-                lastServedSuggestion = nextSuggestion; // Remember what we're about to serve
-                return res.status(200).json(formatSuggestion(lastServedSuggestion));
+                // If a good flip was found, add its ID to our short-term memory.
+                if (suggestion && suggestion.type === 'buy' && suggestion.item_id) {
+                    recentlySuggested.add(suggestion.item_id);
+                } else if (!suggestion || suggestion.type !== 'buy') {
+                    // If no buy suggestion is found, we should clear the skip memory
+                    // so the user isn't stuck if they skipped the only available items.
+                    recentlySuggested.clear();
+                }
+
+                return res.status(200).json(suggestion);
 
             case "/price-suggestion":
                 const { itemId, type } = req.query;
-                if (!itemId || !type) { return res.status(400).json({ message: "itemId and type (buy/sell) are required." }); }
+                if (!itemId || !type) {
+                    return res.status(400).json({ message: "itemId and type (buy/sell) are required." });
+                }
                 const priceSuggestion = await getPriceSuggestion(parseInt(itemId), type);
                 return res.status(200).json(priceSuggestion);
 
@@ -120,6 +123,7 @@ exports.api = onRequest({ cors: true }, async (req, res) => {
                 return res.status(200).json({});
 
             default:
+                console.log(`Unknown path requested: ${req.path}`);
                 return res.status(404).json({ message: "Not Found" });
         }
     });
