@@ -1,5 +1,6 @@
 // tradingLogic.js
 // This file contains functions related to user-specific profit tracking and flip loading.
+// FIXED VERSION - Only processes SELL transactions for profit tracking while maintaining all database saves
 
 const admin = require('firebase-admin');
 const { FieldValue } = require('firebase-admin/firestore'); // Import FieldValue for serverTimestamp
@@ -98,6 +99,8 @@ function normalizeTransaction(transaction) {
 }
 
 /**
+ * FIXED VERSION: Only processes SELL transactions for profit tracking.
+ * Buy orders are completely ignored to prevent pollution of the profit tracker.
  * Processes an array of incoming client transactions and saves/updates aggregated flip data in Firestore.
  * This function handles both creating new flips and updating existing ones, ensuring data consistency
  * and correct profit calculation. IDs are handled as simple strings.
@@ -132,13 +135,27 @@ async function handleProfitTracking(req, res, { db }) {
         return res.status(400).json({ message: "Invalid request body: expected an array of transactions." });
     }
 
-    console.log(`handleProfitTracking: Processing ${incomingTransactions.length} transactions for user: ${displayName}`);
+    // FILTER OUT BUY TRANSACTIONS - Only process sells for profit tracking
+    const sellTransactions = incomingTransactions.filter(transaction => {
+        const normalizedTx = normalizeTransaction({ ...transaction });
+        return normalizedTx.type === 'sell';
+    });
+
+    console.log(`handleProfitTracking: Filtered to ${sellTransactions.length} sell transactions out of ${incomingTransactions.length} total transactions for user: ${displayName}. Buy orders are ignored to prevent profit tracker pollution.`);
+
+    if (sellTransactions.length === 0) {
+        console.log("handleProfitTracking: No sell transactions to process. Buy orders are ignored.");
+        return res.status(200).json({
+            message: "No sell transactions to process. Profit tracker only records completed sales to avoid pollution from buy orders.",
+            flips: []
+        });
+    }
 
     const userFlipsCollectionRef = db.collection('users').doc(displayName).collection('flips');
     const batch = db.batch();
     const currentFlipsState = new Map(); // Map to track current state of flips being processed
 
-    for (let transaction of incomingTransactions) {
+    for (let transaction of sellTransactions) {
         try {
             // Normalize transaction data first, ensuring string IDs and Unix timestamps, and camelCase fields
             transaction = normalizeTransaction(transaction);
@@ -223,13 +240,6 @@ async function handleProfitTracking(req, res, { db }) {
                 console.warn(`handleProfitTracking: Trimmed transactionsHistory for flip ${flipData.id} to ${config.TRADING_CONFIG.MAX_TRANSACTION_HISTORY_PER_FLIP} entries.`); // Use config
             }
             console.log(`handleProfitTracking: Flip ${flipData.id} transactionsHistory length: ${flipData.transactionsHistory.length}`);
-
-            // Update flip metrics based on transaction type
-            if (transaction.type === 'buy') {
-                // This part remains the same, just updating the history
-            } else if (transaction.type === 'sell') {
-                // This block is now self-contained and accurate
-            }
 
             // --- ACCURATE PROFIT CALCULATION FIX ---
             // Recalculate all totals from the transaction history every time to ensure accuracy.
@@ -329,7 +339,7 @@ async function handleProfitTracking(req, res, { db }) {
         };
     });
 
-    console.log(`handleProfitTracking: Successfully processed transactions. Responding with ${updatedFlipsToReturn.length} updated flips.`);
+    console.log(`handleProfitTracking: Successfully processed ${sellTransactions.length} sell transactions. Responding with ${updatedFlipsToReturn.length} updated flips. Buy orders were ignored to prevent profit tracker pollution.`);
     return res.status(200).json(updatedFlipsToReturn);
 }
 

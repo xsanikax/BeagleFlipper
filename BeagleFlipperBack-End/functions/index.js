@@ -11,22 +11,9 @@ const { handleLogin, handleRefreshToken, authenticateRequest } = require('./auth
 const { getHybridSuggestion, getPriceSuggestion } = require('./hybridAnalytics');
 const { getEightHourSuggestion } = require('./eightHourStrategy');
 
-
 // Initialize Firebase Admin SDK
 admin.initializeApp();
 const db = admin.firestore();
-
-// --- NEW: Short-term memory for the Skip button ---
-// This list will hold item IDs that have been suggested recently.
-let recentlySuggested = new Set();
-// Clear the list every 5 minutes to prevent it from getting stuck if the user leaves.
-setInterval(() => {
-    if (recentlySuggested.size > 0) {
-        console.log("[Memory] Clearing recently suggested list due to timeout.");
-        recentlySuggested.clear();
-    }
-}, 300000);
-// ---
 
 // Set global options for all functions
 setGlobalOptions({
@@ -78,10 +65,6 @@ exports.api = onRequest({ cors: true }, async (req, res) => {
 
         switch (req.path) {
             case "/suggestion":
-                // Add the list of recently suggested items to the request body
-                // so the suggestion functions can filter them out.
-                req.body.recently_suggested = Array.from(recentlySuggested);
-
                 if (!displayName) {
                     return res.status(400).json({ message: "Display name is required for suggestions." });
                 }
@@ -92,15 +75,6 @@ exports.api = onRequest({ cors: true }, async (req, res) => {
                     suggestion = await getEightHourSuggestion(req.body, db, displayName, timeframe);
                 } else {
                     suggestion = await getHybridSuggestion(req.body, db, displayName, timeframe);
-                }
-
-                // If a good flip was found, add its ID to our short-term memory.
-                if (suggestion && suggestion.type === 'buy' && suggestion.item_id) {
-                    recentlySuggested.add(suggestion.item_id);
-                } else if (!suggestion || suggestion.type !== 'buy') {
-                    // If no buy suggestion is found, we should clear the skip memory
-                    // so the user isn't stuck if they skipped the only available items.
-                    recentlySuggested.clear();
                 }
 
                 return res.status(200).json(suggestion);
