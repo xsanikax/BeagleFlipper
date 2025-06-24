@@ -1,5 +1,5 @@
-// Enhanced wikiApiHandler.js for High-Velocity Trading
-// Optimized for rapid data fetching and accurate pricing
+// Enhanced wikiApiHandler.js - ULTRA CONSERVATIVE RATE LIMITING
+// Optimized for maximum data retrieval without hitting rate limits
 
 const axios = require('axios');
 const WIKI_API_BASE_URL = 'https://prices.runescape.wiki/api/v1/osrs';
@@ -7,42 +7,61 @@ const USER_AGENT = 'BeagleFlipper High-Velocity Client - Contact @DaBeagleBoss o
 
 let marketDataCache = {};
 const timeseriesCache = new Map();
-const bulkTimeseriesCache = new Map(); // For bulk requests
+const bulkTimeseriesCache = new Map();
 
-// Reduced cache durations for high-velocity trading
+// Ultra conservative cache durations and timeouts
 const MARKET_DATA_CACHE_DURATION_MS = 15 * 1000; // 15 seconds for latest prices
-const TIMESERIES_CACHE_DURATION_MS_5M = 2 * 60 * 1000; // 2 minutes for 5m data
-const API_CALL_TIMEOUT_MS = 8000; // 8-second timeout for faster failures
+const TIMESERIES_CACHE_DURATION_MS_5M = 5 * 60 * 1000; // 5 minutes for 5m data (longer cache)
+const API_CALL_TIMEOUT_MS = 12000; // 12-second timeout
 
-// Rate limiting to avoid API abuse
+// Ultra conservative rate limiting
 const rateLimiter = {
     requests: [],
-    maxRequestsPerMinute: 100,
+    maxRequestsPerMinute: 50, // Reduced from 100 to 50
+    lastRequestTime: 0,
+    minDelayBetweenRequests: 1500, // 1.5 seconds minimum between requests
 
     canMakeRequest() {
         const now = Date.now();
-        // Remove requests older than 1 minute
+
+        // Check if enough time has passed since last request
+        if (now - this.lastRequestTime < this.minDelayBetweenRequests) {
+            return false;
+        }
+
+        // Clean old requests
         this.requests = this.requests.filter(time => now - time < 60000);
         return this.requests.length < this.maxRequestsPerMinute;
     },
 
+    async waitForNextSlot() {
+        const now = Date.now();
+        const timeSinceLastRequest = now - this.lastRequestTime;
+
+        if (timeSinceLastRequest < this.minDelayBetweenRequests) {
+            const waitTime = this.minDelayBetweenRequests - timeSinceLastRequest;
+            console.log(`[Rate Limiter] Waiting ${waitTime}ms before next request...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+
+        // Double check rate limit
+        while (!this.canMakeRequest()) {
+            console.log('[Rate Limiter] Rate limit reached, waiting 30 seconds...');
+            await new Promise(resolve => setTimeout(resolve, 30000));
+        }
+    },
+
     recordRequest() {
-        this.requests.push(Date.now());
+        this.lastRequestTime = Date.now();
+        this.requests.push(this.lastRequestTime);
     }
 };
 
 /**
- * Enhanced fetch with retry logic and better error handling
+ * Enhanced fetch with ultra-conservative rate limiting
  */
-async function fetchFromWiki(endpoint, params = {}, retries = 2) {
-    if (!rateLimiter.canMakeRequest()) {
-        console.warn('[Wiki API] Rate limit reached, waiting...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        if (!rateLimiter.canMakeRequest()) {
-            throw new Error('Rate limit exceeded');
-        }
-    }
-
+async function fetchFromWiki(endpoint, params = {}, retries = 3) {
+    await rateLimiter.waitForNextSlot();
     rateLimiter.recordRequest();
 
     const url = `${WIKI_API_BASE_URL}/${endpoint}`;
@@ -59,62 +78,61 @@ async function fetchFromWiki(endpoint, params = {}, retries = 2) {
 
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
+            console.log(`[Wiki API] Requesting /${endpoint}${params.id ? ` (item ${params.id})` : ''} (attempt ${attempt + 1})`);
             const response = await axios.get(url, options);
 
-            // Validate response
             if (!response.data) {
                 throw new Error('Empty response data');
             }
 
+            console.log(`[Wiki API] Success: /${endpoint}${params.id ? ` (item ${params.id})` : ''}`);
             return response.data;
+
         } catch (error) {
             const isLastAttempt = attempt === retries;
 
             if (error.response) {
-                console.error(`[Wiki API] HTTP ${error.response.status} from /${endpoint} (attempt ${attempt + 1})`);
+                console.error(`[Wiki API] HTTP ${error.response.status} from /${endpoint}${params.id ? ` (item ${params.id})` : ''} (attempt ${attempt + 1})`);
+
                 if (error.response.status === 429) {
-                    // Rate limited, wait longer
+                    // Rate limited - wait longer
+                    const waitTime = isLastAttempt ? 0 : 60000 * (attempt + 1); // 1, 2, 3 minutes
                     if (!isLastAttempt) {
-                        await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+                        console.log(`[Wiki API] Rate limited, waiting ${waitTime/1000} seconds...`);
+                        await new Promise(resolve => setTimeout(resolve, waitTime));
                         continue;
                     }
-                }
-                if (error.response.status >= 500 && !isLastAttempt) {
-                    // Server error, retry
-                    await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+                } else if (error.response.status >= 500 && !isLastAttempt) {
+                    // Server error - retry with exponential backoff
+                    await new Promise(resolve => setTimeout(resolve, 5000 * (attempt + 1)));
                     continue;
                 }
             } else if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-                console.error(`[Wiki API] Timeout on /${endpoint} (attempt ${attempt + 1})`);
+                console.error(`[Wiki API] Timeout on /${endpoint}${params.id ? ` (item ${params.id})` : ''} (attempt ${attempt + 1})`);
                 if (!isLastAttempt) {
-                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                    await new Promise(resolve => setTimeout(resolve, 3000 * (attempt + 1)));
                     continue;
                 }
             } else {
-                console.error(`[Wiki API] Network error on /${endpoint}:`, error.message);
+                console.error(`[Wiki API] Network error on /${endpoint}${params.id ? ` (item ${params.id})` : ''}:`, error.message);
             }
 
             if (isLastAttempt) {
-                console.error(`[Wiki API] All attempts failed for /${endpoint}`);
+                console.error(`[Wiki API] All attempts failed for /${endpoint}${params.id ? ` (item ${params.id})` : ''}`);
                 return null;
             }
         }
     }
-
     return null;
 }
 
-/**
- * Enhanced market data fetching with validation
- */
 async function ensureMarketDataIsFresh() {
     const now = Date.now();
     if (marketDataCache.timestamp && (now - marketDataCache.timestamp < MARKET_DATA_CACHE_DURATION_MS)) {
-        return; // Cache is fresh
+        return;
     }
 
     console.log('[Wiki API] Refreshing market data for high-velocity trading...');
-
     try {
         const [latestData, mappingData] = await Promise.all([
             fetchFromWiki('latest'),
@@ -122,27 +140,17 @@ async function ensureMarketDataIsFresh() {
         ]);
 
         if (latestData && mappingData) {
-            // Validate data structure
-            if (!latestData.data || typeof latestData.data !== 'object') {
-                throw new Error('Invalid latest data structure');
-            }
-
-            if (!Array.isArray(mappingData)) {
-                throw new Error('Invalid mapping data structure');
-            }
-
-            // Filter out invalid price data
             const validPriceData = {};
-            Object.entries(latestData.data).forEach(([itemId, priceData]) => {
-                if (priceData && priceData.high > 0 && priceData.low > 0 && priceData.high >= priceData.low) {
-                    validPriceData[itemId] = priceData;
-                }
-            });
+            if (latestData.data && typeof latestData.data === 'object') {
+                Object.entries(latestData.data).forEach(([itemId, priceData]) => {
+                    if (priceData && priceData.high > 0 && priceData.low > 0 && priceData.high >= priceData.low) {
+                        validPriceData[itemId] = priceData;
+                    }
+                });
+            }
 
-            // Filter out items without buy limits
-            const validMapping = mappingData.filter(item =>
-                item && item.id && item.name && item.limit && item.limit > 0
-            );
+            const validMapping = Array.isArray(mappingData) ?
+                mappingData.filter(item => item && item.id && item.name && item.limit && item.limit > 0) : [];
 
             marketDataCache = {
                 latest: validPriceData,
@@ -153,47 +161,38 @@ async function ensureMarketDataIsFresh() {
 
             console.log(`[Wiki API] Market data updated: ${marketDataCache.itemCount} items with valid prices`);
         } else {
-            throw new Error('Failed to fetch market data');
+            throw new Error('Failed to fetch initial market data');
         }
     } catch (error) {
         console.error('[Wiki API] Error updating market data:', error.message);
-        // Keep using old cache if available
-        if (!marketDataCache.latest) {
-            console.error('[Wiki API] No cached data available, suggestions may be limited');
-        }
     }
 }
 
-/**
- * Enhanced timeseries fetching with better caching
- */
 async function fetchTimeseriesForItem(itemId, timestep = '5m') {
     const cacheKey = `${itemId}-${timestep}`;
     const now = Date.now();
-
     const cachedEntry = timeseriesCache.get(cacheKey);
+
     if (cachedEntry && (now - cachedEntry.timestamp < TIMESERIES_CACHE_DURATION_MS_5M)) {
+        console.log(`[Wiki API] Cache hit for item ${itemId}`);
         return cachedEntry.data;
     }
 
     try {
         const response = await fetchFromWiki('timeseries', { id: itemId, timestep: timestep });
-
         if (response && Array.isArray(response.data)) {
-            // Validate and clean timeseries data
-            const validData = response.data.filter(point =>
-                point &&
-                point.timestamp &&
-                (point.avgHighPrice > 0 || point.avgLowPrice > 0) &&
-                point.avgHighPrice >= point.avgLowPrice
+            const validData = response.data.filter(p =>
+                p && p.timestamp &&
+                (p.avgHighPrice > 0 || p.avgLowPrice > 0) &&
+                p.avgHighPrice >= p.avgLowPrice
             );
 
             if (validData.length > 0) {
                 timeseriesCache.set(cacheKey, { data: validData, timestamp: now });
+                console.log(`[Wiki API] Cached ${validData.length} data points for item ${itemId}`);
                 return validData;
             }
         }
-
         return null;
     } catch (error) {
         console.error(`[Wiki API] Error fetching timeseries for item ${itemId}:`, error.message);
@@ -202,57 +201,10 @@ async function fetchTimeseriesForItem(itemId, timestep = '5m') {
 }
 
 /**
- * Bulk timeseries fetching for multiple items (more efficient)
+ * REMOVED: Bulk fetching - instead use individual calls with proper spacing
+ * This is handled in the training data script now
  */
-async function fetchBulkTimeseries(itemIds, timestep = '5m') {
-    const cacheKey = `bulk-${itemIds.sort().join(',')}-${timestep}`;
-    const now = Date.now();
 
-    const cachedEntry = bulkTimeseriesCache.get(cacheKey);
-    if (cachedEntry && (now - cachedEntry.timestamp < TIMESERIES_CACHE_DURATION_MS_5M)) {
-        return cachedEntry.data;
-    }
-
-    // Fetch individual timeseries for each item
-    const results = {};
-    const chunkSize = 10; // Process in smaller chunks to avoid overwhelming the API
-
-    for (let i = 0; i < itemIds.length; i += chunkSize) {
-        const chunk = itemIds.slice(i, i + chunkSize);
-        const promises = chunk.map(itemId =>
-            fetchTimeseriesForItem(itemId, timestep)
-                .then(data => ({ itemId, data }))
-                .catch(error => ({ itemId, error: error.message }))
-        );
-
-        const chunkResults = await Promise.allSettled(promises);
-
-        chunkResults.forEach(result => {
-            if (result.status === 'fulfilled' && result.value.data) {
-                results[result.value.itemId] = result.value.data;
-            }
-        });
-
-        // Small delay between chunks to be respectful to the API
-        if (i + chunkSize < itemIds.length) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-    }
-
-    bulkTimeseriesCache.set(cacheKey, { data: results, timestamp: now });
-
-    // Clean cache periodically
-    if (bulkTimeseriesCache.size > 50) {
-        const oldestKeys = Array.from(bulkTimeseriesCache.keys()).slice(0, 10);
-        oldestKeys.forEach(key => bulkTimeseriesCache.delete(key));
-    }
-
-    return results;
-}
-
-/**
- * Get current market data with additional metadata
- */
 function getMarketData() {
     return {
         ...marketDataCache,
@@ -261,21 +213,14 @@ function getMarketData() {
     };
 }
 
-/**
- * Get high-liquidity items for quick scanning
- */
 function getHighLiquidityItems(minLimit = 1000) {
     if (!marketDataCache.mapping) return [];
-
     return marketDataCache.mapping
         .filter(item => item.limit >= minLimit)
         .sort((a, b) => b.limit - a.limit)
-        .slice(0, 100); // Top 100 high-limit items
+        .slice(0, 100);
 }
 
-/**
- * Clear all caches (useful for testing or memory management)
- */
 function clearCaches() {
     marketDataCache = {};
     timeseriesCache.clear();
@@ -283,23 +228,20 @@ function clearCaches() {
     console.log('[Wiki API] All caches cleared');
 }
 
-/**
- * Get cache statistics for monitoring
- */
 function getCacheStats() {
     return {
         marketDataCached: !!marketDataCache.timestamp,
         marketDataAge: marketDataCache.timestamp ? Date.now() - marketDataCache.timestamp : null,
         timeseriesCacheSize: timeseriesCache.size,
         bulkTimeseriesCacheSize: bulkTimeseriesCache.size,
-        rateLimiterRequests: rateLimiter.requests.length
+        rateLimiterRequests: rateLimiter.requests.length,
+        lastRequestTime: rateLimiter.lastRequestTime
     };
 }
 
 module.exports = {
     ensureMarketDataIsFresh,
     fetchTimeseriesForItem,
-    fetchBulkTimeseries,
     getMarketData,
     getHighLiquidityItems,
     clearCaches,

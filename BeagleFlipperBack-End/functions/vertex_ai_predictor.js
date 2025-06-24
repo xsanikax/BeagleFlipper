@@ -1,5 +1,5 @@
 // vertex_ai_predictor.js
-// Vertex AI AutoML prediction service to replace LightGBM model runner
+// MODIFIED VERSION - Uses lazy initialization for the AI Platform client to prevent startup crashes.
 
 const admin = require('firebase-admin');
 const { PredictionServiceClient } = require('@google-cloud/aiplatform');
@@ -7,7 +7,8 @@ const { PredictionServiceClient } = require('@google-cloud/aiplatform');
 const PROJECT_ID = 'our-vigil-461919-m0';
 const LOCATION = 'europe-west2';
 
-const predictionClient = new PredictionServiceClient();
+// MODIFICATION: Define the client variable but do not instantiate it here.
+let predictionClient;
 
 let currentModelCache = null;
 let modelCacheTime = null;
@@ -18,29 +19,29 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
  */
 async function getCurrentModel() {
     const now = Date.now();
-    
+
     // Return cached model if still valid
     if (currentModelCache && modelCacheTime && (now - modelCacheTime) < CACHE_DURATION) {
         return currentModelCache;
     }
-    
+
     console.log('[Vertex AI Predictor] Loading current model from Firestore...');
-    
+
     const db = admin.firestore();
     const modelDoc = await db.collection('model_metadata').doc('current_model').get();
-    
+
     if (!modelDoc.exists) {
         throw new Error('No trained model found. Please run model training first.');
     }
-    
+
     const modelData = modelDoc.data();
     if (modelData.type !== 'vertex_ai_automl') {
         throw new Error('Model type mismatch. Expected Vertex AI AutoML model.');
     }
-    
+
     currentModelCache = modelData;
     modelCacheTime = now;
-    
+
     console.log(`[Vertex AI Predictor] Loaded model: ${modelData.modelName}`);
     return modelData;
 }
@@ -51,11 +52,18 @@ async function getCurrentModel() {
  */
 async function predictProfitability(features) {
     try {
+        // MODIFICATION: LAZY INITIALIZATION
+        // The client is only created the first time this function is called.
+        if (!predictionClient) {
+            console.log('[Vertex AI Predictor] Initializing PredictionServiceClient...');
+            predictionClient = new PredictionServiceClient();
+        }
+
         console.log('[Vertex AI Predictor] Making prediction request...');
-        
+
         // Get current model
         const modelData = await getCurrentModel();
-        
+
         // Prepare the prediction request
         const instance = {
             buy_price: features.buy_price || 0,
@@ -69,43 +77,40 @@ async function predictProfitability(features) {
             momentum: features.momentum || 0,
             ma_price_ratio: features.ma_price_ratio || 1
         };
-        
+
         const request = {
             endpoint: modelData.modelName,
             instances: [{ structValue: { fields: {} } }]
         };
-        
+
         // Convert instance to Google Cloud format
         for (const [key, value] of Object.entries(instance)) {
             request.instances[0].structValue.fields[key] = {
                 numberValue: value
             };
         }
-        
+
         console.log('[Vertex AI Predictor] Calling Vertex AI prediction service...');
-        
+
         // Make prediction
         const [response] = await predictionClient.predict(request);
-        
+
         if (!response.predictions || response.predictions.length === 0) {
             throw new Error('No predictions returned from Vertex AI');
         }
-        
+
         const prediction = response.predictions[0];
-        
+
         // Extract confidence score from AutoML Tables response
-        // AutoML Tables returns classification probabilities
         let confidence = 0.5; // default neutral
-        
+
         if (prediction.structValue && prediction.structValue.fields) {
             const fields = prediction.structValue.fields;
-            
-            // Look for probability fields (AutoML returns probabilities for each class)
+
             if (fields.classes && fields.scores) {
                 const classes = fields.classes.listValue.values;
                 const scores = fields.scores.listValue.values;
-                
-                // Find probability for class "1" (profitable)
+
                 for (let i = 0; i < classes.length; i++) {
                     if (classes[i].stringValue === '1') {
                         confidence = scores[i].numberValue;
@@ -114,20 +119,19 @@ async function predictProfitability(features) {
                 }
             }
         }
-        
+
         console.log(`[Vertex AI Predictor] Prediction confidence: ${confidence}`);
-        
+
         return {
             confidence: confidence,
             prediction: confidence > 0.5 ? 'profitable' : 'not_profitable',
             model_type: 'vertex_ai_automl',
             timestamp: new Date().toISOString()
         };
-        
+
     } catch (error) {
         console.error('[Vertex AI Predictor] Prediction failed:', error);
-        
-        // Fallback to neutral prediction if service fails
+
         return {
             confidence: 0.5,
             prediction: 'neutral',
@@ -149,29 +153,17 @@ function validateFeatures(features) {
         'buy_day_of_week',
         'buy_hour_of_day'
     ];
-    
+
     for (const feature of requiredFeatures) {
         if (features[feature] === undefined || features[feature] === null) {
             throw new Error(`Missing required feature: ${feature}`);
         }
     }
-    
-    // Validate ranges
-    if (features.buy_price <= 0) {
-        throw new Error('buy_price must be positive');
-    }
-    
-    if (features.quantity <= 0) {
-        throw new Error('quantity must be positive');
-    }
-    
-    if (features.buy_day_of_week < 0 || features.buy_day_of_week > 6) {
-        throw new Error('buy_day_of_week must be 0-6');
-    }
-    
-    if (features.buy_hour_of_day < 0 || features.buy_hour_of_day > 23) {
-        throw new Error('buy_hour_of_day must be 0-23');
-    }
+
+    if (features.buy_price <= 0) throw new Error('buy_price must be positive');
+    if (features.quantity <= 0) throw new Error('quantity must be positive');
+    if (features.buy_day_of_week < 0 || features.buy_day_of_week > 6) throw new Error('buy_day_of_week must be 0-6');
+    if (features.buy_hour_of_day < 0 || features.buy_hour_of_day > 23) throw new Error('buy_hour_of_day must be 0-23');
 }
 
 /**
@@ -179,15 +171,11 @@ function validateFeatures(features) {
  */
 async function predict(features) {
     try {
-        // Validate input features
         validateFeatures(features);
-        
-        // Make prediction
         const result = await predictProfitability(features);
-        
         console.log('[Vertex AI Predictor] Prediction completed successfully');
         return result;
-        
+
     } catch (error) {
         console.error('[Vertex AI Predictor] Prediction error:', error);
         throw error;
@@ -209,4 +197,3 @@ module.exports = {
     clearModelCache,
     validateFeatures
 };
-

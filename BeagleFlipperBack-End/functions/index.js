@@ -1,4 +1,5 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
@@ -10,6 +11,7 @@ const { handleProfitTracking, handleLoadFlips } = require('./tradingLogic');
 const { handleLogin, handleRefreshToken, authenticateRequest } = require('./auth');
 const { getHybridSuggestion, getPriceSuggestion } = require('./hybridAnalytics');
 const { getEightHourSuggestion } = require('./eightHourStrategy');
+const { trainAndDeployModel } = require('./vertex_ai_trainer');
 
 // Initialize Firebase Admin SDK
 admin.initializeApp();
@@ -40,8 +42,24 @@ async function handleSignup(req, res) {
   }
 }
 
+// MODIFICATION: Memory increased to 1GiB.
+exports.scheduledModelTraining = onSchedule({
+    schedule: "every 1 hours",
+    memory: "1GiB"
+}, async (event) => {
+    console.log("Scheduled model training job started (hourly schedule).");
+    try {
+        await trainAndDeployModel();
+        console.log("Successfully initiated the Vertex AI training pipeline.");
+    } catch (error) {
+        console.error("Scheduled model training job failed:", error);
+    }
+});
+
+
 // Main API endpoint
-exports.api = onRequest({ cors: true }, async (req, res) => {
+// MODIFICATION: Memory increased to 1GiB.
+exports.api = onRequest({ cors: true, memory: "1GiB" }, async (req, res) => {
     if (req.method === 'OPTIONS') {
         res.set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
         res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');

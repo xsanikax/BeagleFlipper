@@ -1,8 +1,7 @@
 // vertex_ai_trainer.js
-// VERSION: Data Transformation Fix
-// This definitive version reads the user's historical DaBeagleBoss.csv,
-// intelligently processes it into completed flips, adds the required 'outcome'
-// column with placeholder features, and uses this enriched data to train the model.
+// MODIFIED VERSION - Correctly queries Firestore and prepares data for AutoML training.
+// This script gathers historical data, combines it with new feature-rich data from Firestore,
+// and starts a Vertex AI training pipeline.
 
 const { DatasetServiceClient, PipelineServiceClient } = require('@google-cloud/aiplatform');
 const admin = require('firebase-admin');
@@ -10,12 +9,16 @@ const { parse } = require("csv-parse/sync");
 
 // --- Configuration ---
 const PROJECT_ID = process.env.GCLOUD_PROJECT || 'our-vigil-461919-m0';
-const BUCKET_NAME = 'our-vigil-461919-m0-data'; 
+const BUCKET_NAME = 'our-vigil-461919-m0-data';
 const LOCATION = 'us-central1';
 const MODEL_NAME = 'flipper_live_model';
 
 /**
  * Main function to orchestrate the entire training and deployment pipeline.
+ * NOTE: This function INITIATES a long-running training job. It does not wait for completion.
+ * You will need to monitor the Vertex AI console for the pipeline's completion status.
+ * After the model is trained, you must manually (or via another script) deploy it to an endpoint
+ * and update the 'model_metadata/current_model' document in Firestore with the new endpoint ID.
  */
 async function trainAndDeployModel() {
     const clientOptions = { apiEndpoint: `${LOCATION}-aiplatform.googleapis.com` };
@@ -26,7 +29,7 @@ async function trainAndDeployModel() {
 
     console.log("Step 1: Gathering and processing all training data...");
     const trainingDataArray = await gatherAndProcessTrainingData(db, bucket);
-    
+
     if (trainingDataArray.length < 50) {
         const errorMessage = `Not enough training examples found (${trainingDataArray.length} rows). AutoML requires at least 50. Please continue trading to generate data.`;
         console.error(errorMessage);
@@ -42,17 +45,16 @@ async function trainAndDeployModel() {
     console.log("Step 4: Starting AutoML training job...");
     await trainVertexModel(datasetResourceName, pipelineClient);
 
-    console.log("SUCCESS: Vertex AI training pipeline has been successfully started.");
+    console.log("SUCCESS: Vertex AI training pipeline has been successfully started. Please monitor the Google Cloud Console for completion.");
 }
 
 
 /**
- * Gathers data from historical CSV and new Firestore flips, then processes
- * the historical data into the correct training format.
+ * Gathers data from historical CSV and new Firestore flips, then processes it.
  */
 async function gatherAndProcessTrainingData(db, bucket) {
     let historicalFlips = [];
-    
+
     // --- Step 1: Process historical data from DaBeagleBoss.csv ---
     try {
         const filePath = 'DaBeagleBoss.csv';
@@ -77,9 +79,10 @@ async function gatherAndProcessTrainingData(db, bucket) {
     }
 
     // --- Step 2: Fetch new, feature-rich data from Firestore ---
+    // MODIFICATION: Query fields must match what's in Firestore (camelCase for isClosed, snake_case for ai_features).
     const snapshot = await db.collectionGroup('flips')
-        .where('is_closed', '==', true)
-        .where('ai_features', '!=', null)
+        .where('isClosed', '==', true)       // Use camelCase as saved in tradingLogic.js
+        .where('ai_features', '!=', null)  // Use snake_case as saved in tradingLogic.js
         .get();
 
     let firestoreRecords = [];
@@ -87,6 +90,7 @@ async function gatherAndProcessTrainingData(db, bucket) {
         const data = doc.data();
         if (data.ai_features) {
             const features = data.ai_features;
+            // The target column for the model to predict
             features.outcome = data.profit > 0 ? 1 : 0;
             firestoreRecords.push(features);
         }
@@ -111,9 +115,9 @@ function processRawTransactions(transactions) {
     transactions.forEach(t => {
         if (!t.item_id || !t.type || !t.price || !t.quantity) return; // Skip invalid lines
 
-        const record = { 
-            price: parseFloat(t.price), 
-            quantity: parseInt(t.quantity, 10) 
+        const record = {
+            price: parseFloat(t.price),
+            quantity: parseInt(t.quantity, 10)
         };
 
         if (isNaN(record.price) || isNaN(record.quantity)) return; // Skip if parsing fails
@@ -140,7 +144,7 @@ function processRawTransactions(transactions) {
                 const sell = sellRecords[i];
 
                 const profit = (sell.price - buy.price) * Math.min(buy.quantity, sell.quantity);
-                
+
                 // Create a training example with placeholder features for historical data
                 completedFlips.push({
                     buy_price: buy.price,
@@ -176,7 +180,7 @@ async function uploadDataToGCS(dataArray, bucket) {
         });
         csvContent += values.join(',') + '\n';
     });
-    const fileName = `training-data/flipper-data-${new Date().getTime()}.csv`;
+    const fileName = `training-data/flipper-data-${new Date().toISOString()}.csv`;
     const file = bucket.file(fileName);
     await file.save(csvContent);
     return `gs://${BUCKET_NAME}/${fileName}`;

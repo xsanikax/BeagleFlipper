@@ -1,30 +1,39 @@
-# Beagle Flipper
+import pandas as pd
+from rswiki_wrapper.osrs import TimeSeries
+from datetime import datetime
 
-[![Discord](https://img.shields.io/discord/1208453764630057010.svg)](https://discord.gg/UyQxA4QJAq)
+# 1. Load CSV flips
+df = pd.read_csv("DaBeagleBoss.csv", parse_dates=["timestamp"])
+df["action"] = df["action"].str.lower()
 
-Beagle Flipper is an AI-powered assistant designed to enhance your trading experience in Old School RuneScape. With its advanced algorithms and market analysis, Beagle Flipper provides intelligent suggestions on which items to flip, optimal prices and quantities for buying and selling, and when to cancel existing offers to maximize your profit per hour.
+# 2. Set up timeseries cache
+cache = {}
+def ts(item_id, interval):
+    key = (item_id, interval)
+    if key not in cache:
+        ts_data = TimeSeries(game="osrs",
+                             user_agent="MyScript - you@example.com",
+                             id=str(item_id), timestep=interval)
+        df_ts = pd.DataFrame(ts_data.content)
+        df_ts["timestamp"] = pd.to_datetime(df_ts["timestamp"], unit="s")
+        cache[key] = df_ts
+    return cache[key]
 
-## Community
-Join our [Discord server](https://discord.gg/UyQxA4QJAq) to engage with fellow users, discuss the project, ask questions, and receive support. Our community is dedicated to helping you make the most of Beagle Flipper and enhancing your trading experience in Old School RuneScape.
+# 3. Match flips to closest market data
+records = []
+for _, r in df.iterrows():
+    df_hist = ts(r["item_id"], "5m")  # or use "1h"
+    idx = (df_hist["timestamp"] - r["timestamp"]).abs().idxmin()
+    bucket = df_hist.loc[idx]
+    mid = (bucket["avgHighPrice"] + bucket["avgLowPrice"]) / 2
+    diff = (r["price"] - bucket["avgHighPrice"]) if r["action"]=="buy" else (bucket["avgLowPrice"] - r["price"])
+    records.append({
+        **r.to_dict(),
+        "bucket_ts": bucket["timestamp"],
+        "mid_price": mid, "diff": diff,
+        "spread_pct": diff/mid * 100
+    })
 
-
-## Features
- - Intelligent item suggestions
- - Optimal price and quantity suggestions
- - Real-time offer cancellation suggestions
- - Quant-model price predictions
- - Cross-device flip tracking
- - Price graphs, stats and more!
-
-![image info](./images/beagle-flipper-ui.png)
-
-![image info](./images/price-graph.png)
-
-## Attribution
-Icons were created by cbrewitt or sourced from Flaticon. The following attributions are provided in accordance with the Flaticon license agreement.
-<a href="https://www.flaticon.com/free-icons/internet" title="internet icons">Internet icons created by Freepik - Flaticon</a>
-
-Some code was used from Runelite Plugins (BSD 2-Clause License):
-- [Flipping Utilities](https://github.com/Flipping-Utilities/rl-plugin?tab=readme-ov-file)
-- [Flipper](https://github.com/OkayestDev/OSRS-Flipper)
-- [Discord Level Notifications](https://github.com/ATremonte/Discord-Level-Notifications)
+out = pd.DataFrame(records)
+out.to_csv("analyzed_" + "DaBeagleBoss.csv", index=False)
+print("✅ Analysis complete:", len(out), "rows processed.")
