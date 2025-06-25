@@ -201,9 +201,28 @@ async function fetchTimeseriesForItem(itemId, timestep = '5m') {
 }
 
 /**
- * REMOVED: Bulk fetching - instead use individual calls with proper spacing
- * This is handled in the training data script now
+ * Bulk fetch timeseries for multiple items with proper rate limiting
  */
+async function fetchBulkTimeseries(itemIds, timestep = '5m') {
+    const results = new Map();
+
+    console.log(`[Wiki API] Starting bulk timeseries fetch for ${itemIds.length} items...`);
+
+    for (const itemId of itemIds) {
+        try {
+            const timeseries = await fetchTimeseriesForItem(itemId, timestep);
+            if (timeseries && timeseries.length > 0) {
+                results.set(itemId, timeseries);
+            }
+        } catch (error) {
+            console.warn(`[Wiki API] Failed to fetch timeseries for item ${itemId}:`, error.message);
+            continue;
+        }
+    }
+
+    console.log(`[Wiki API] Bulk timeseries fetch complete: ${results.size}/${itemIds.length} items`);
+    return results;
+}
 
 function getMarketData() {
     return {
@@ -211,6 +230,14 @@ function getMarketData() {
         cacheAge: marketDataCache.timestamp ? Date.now() - marketDataCache.timestamp : null,
         isStale: marketDataCache.timestamp ? (Date.now() - marketDataCache.timestamp) > MARKET_DATA_CACHE_DURATION_MS : true
     };
+}
+
+// ADD THE MISSING METHOD
+function getMapping() {
+    if (!marketDataCache.mapping) {
+        throw new Error('Mapping data not available');
+    }
+    return marketDataCache.mapping;
 }
 
 function getHighLiquidityItems(minLimit = 1000) {
@@ -242,7 +269,9 @@ function getCacheStats() {
 module.exports = {
     ensureMarketDataIsFresh,
     fetchTimeseriesForItem,
+    fetchBulkTimeseries, // Re-added this method
     getMarketData,
+    getMapping, // ADDED THE MISSING METHOD
     getHighLiquidityItems,
     clearCaches,
     getCacheStats
