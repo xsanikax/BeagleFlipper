@@ -1,266 +1,132 @@
-// The Ultimate Trader - FIXED VERSION
-// Removed the problematic getMapping call that was causing the error
+const { BollingerBands, RSI, MACD } = require('technicalindicators');
+const wikiApi = require('./wikiApiHandler');
+const config = require('./tradingConfig');
 
-const { TRADING_CONFIG } = require('./tradingConfig');
-
-// --- Helper Functions to calculate market metrics ---
-
-function calculateLiquidityScore(timeseries, limit) {
-    if (!timeseries || timeseries.length < 3) return 0;
-    const recentVolume = timeseries.slice(-3).reduce((sum, point) => sum + (point.lowPriceVolume || 0) + (point.highPriceVolume || 0), 0) / 3;
-    const volumes = timeseries.slice(-6).map(point => (point.lowPriceVolume || 0) + (point.highPriceVolume || 0));
-    if (volumes.length === 0) return 0;
-    const volumeMean = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-    if (volumeMean === 0) return 0;
-    const volumeStdDev = Math.sqrt(volumes.reduce((sum, vol) => sum + Math.pow(vol - volumeMean, 2), 0) / volumes.length);
-    const consistencyRatio = (volumeMean - volumeStdDev) / volumeMean;
-    const volumeToLimitRatio = Math.min(recentVolume / (limit || 1000), 10);
-    return Math.max(0, volumeToLimitRatio * Math.max(0.3, consistencyRatio) * 100);
-}
-
-function analyzeSpreadOpportunity(latest, timeseries) {
-    if (!latest || !timeseries || timeseries.length < 2) return { spreadStability: 0, currentSpreadPercent: 0 };
-    const currentSpread = latest.high - latest.low;
-    const currentSpreadPercent = latest.low > 0 ? (currentSpread / latest.low) * 100 : 0;
-    const recentSpreads = timeseries.slice(-6).map(point => point.avgHighPrice - point.avgLowPrice).filter(s => s >= 0);
-    if (recentSpreads.length < 2) return { spreadStability: 0.5, currentSpreadPercent };
-    const avgSpread = recentSpreads.reduce((a, b) => a + b, 0) / recentSpreads.length;
-    let spreadStability = 0;
-    if (avgSpread > 0) {
-        const stdDev = Math.sqrt(recentSpreads.reduce((sum, spread) => sum + Math.pow(spread - avgSpread, 2), 0) / recentSpreads.length);
-        spreadStability = 1 - (stdDev / avgSpread);
-    }
-    return { spreadStability: Math.max(0, spreadStability), currentSpreadPercent };
-}
+// --- SMART CACHE ---
+// Caches a list of top-ranked candidates to provide instant subsequent suggestions.
+let cachedTopCandidates = [];
+let lastCacheTime = 0;
+// Short-term memory for suggestions made within the current cache's lifetime.
+let recentlySuggested = new Set();
 
 /**
- * The "Brain" of the bot. Implements the final meta-strategy to calculate prices.
- * This is the logic we reverse-engineered from your successful trade history.
+ * Calculates a "DaBeagleBoss" score based on multiple technical indicators.
+ * @param {Array<object>} prices - Price history for an item.
+ * @returns {number} A score indicating the strength of the buy signal.
  */
-function calculateUltimatePrices(timeseries, timeframe) {
-    // New, corrected logic for windowSize to handle your 5m strategy
-    let windowSize;
-    if (timeframe === 5) {
-        // For the 5m strategy, look at the last two 5-minute intervals.
-        windowSize = 2;
-    } else {
-        // For all other strategies (30m, 2h, 8h), use the original calculation.
-        windowSize = Math.ceil(timeframe / 5);
-    }
-
-    if (!timeseries || timeseries.length < windowSize) return { buyPrice: null, sellPrice: null };
-
-    const windowData = timeseries.slice(-windowSize);
-
-    const lowPrice = windowData.reduce((min, p) => Math.min(min, p.avgLowPrice), Infinity);
-    const highPrice = windowData.reduce((max, p) => Math.max(max, p.avgHighPrice), 0);
-    const prices = windowData.map(p => (p.avgLowPrice + p.avgHighPrice) / 2).filter(p => p > 0);
-    if (prices.length === 0) return { buyPrice: null, sellPrice: null };
-    const smaPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
-
-    let buyPrice, sellPrice;
-    const spreadAnalysis = analyzeSpreadOpportunity({ low: lowPrice, high: highPrice }, timeseries);
-
-    // BUY LOGIC: Always "Snipe the Floor"
-    buyPrice = lowPrice + 1;
-
-    // SELL LOGIC: Adapts based on item stability
-    if (spreadAnalysis && spreadAnalysis.currentSpreadPercent < 1.5 && spreadAnalysis.spreadStability > 0.85) {
-        // For stable, low-margin items, aggressively target the peak
-        sellPrice = highPrice - 1;
-    } else {
-        // For all other items, target the safer statistical center (the SMA)
-        sellPrice = smaPrice;
-    }
-
-    if (!buyPrice || !sellPrice || isNaN(buyPrice) || isNaN(sellPrice) || sellPrice <= buyPrice) {
-        return { buyPrice: null, sellPrice: null };
-    }
-    return { buyPrice, sellPrice };
-}
-
-
-/**
- * Main suggestion function, called by index.js
- */
-async function getSuggestions(userState, db, displayName, timeframe, dependencies) {
+function getDaBeagleBossScore(prices) {
+    let score = 0;
+    const priceValues = prices.map(p => (p.avgHighPrice + p.avgLowPrice) / 2);
+    const latestPrice = priceValues[priceValues.length - 1];
     try {
-        console.log('[Suggestion Engine] Starting getSuggestions...');
-
-        const { wikiApi, getRecentlyBoughtQuantities } = dependencies;
-
-        // Validate inputs
-        if (!userState || typeof userState !== 'object') {
-            return { type: "wait", message: "Invalid user state..." };
-        }
-
-        if (!wikiApi) {
-            return { type: "wait", message: "Wiki API not available..." };
-        }
-
-        const { gp = 0, offers = [], blocked_items = [] } = userState;
-        console.log('[Suggestion Engine] User state - GP:', gp, 'Offers:', offers.length, 'Blocked items:', blocked_items.length);
-
-        // Get market data
-        let marketData;
-        try {
-            console.log('[Suggestion Engine] Ensuring market data is fresh...');
-            await wikiApi.ensureMarketDataIsFresh();
-            marketData = wikiApi.getMarketData();
-            console.log('[Suggestion Engine] Market data retrieved, items:', marketData?.itemCount || 0);
-        } catch (error) {
-            console.error('[Suggestion Engine] Error getting market data:', error);
-            return { type: "wait", message: "Refreshing market data..." };
-        }
-
-        // Check if we have the required data
-        if (!marketData || !marketData.latest || !marketData.mapping) {
-            console.log('[Suggestion Engine] Missing market data components:', {
-                hasMarketData: !!marketData,
-                hasLatest: !!marketData?.latest,
-                hasMapping: !!marketData?.mapping
-            });
-            return { type: "wait", message: "Waiting for market data..." };
-        }
-
-        // FIXED: Use mapping from market data directly (it's already loaded in ensureMarketDataIsFresh)
-        const mapping = marketData.mapping;
-        if (!mapping || !Array.isArray(mapping)) {
-            console.log('[Suggestion Engine] No mapping data available, type:', typeof mapping, 'isArray:', Array.isArray(mapping));
-            return { type: "wait", message: "Loading item mappings..." };
-        }
-
-        console.log('[Suggestion Engine] Mapping loaded, items:', mapping.length);
-
-        const activeOfferItemIds = new Set(offers.filter(o => o && o.status !== 'empty').map(o => o.item_id));
-        const emptySlots = 8 - activeOfferItemIds.size;
-        console.log('[Suggestion Engine] Active offers:', activeOfferItemIds.size, 'Empty slots:', emptySlots);
-
-        if (emptySlots <= 0) return { type: "wait", message: "All slots active." };
-
-        const cashPerSlot = Math.floor(gp / emptySlots);
-        console.log('[Suggestion Engine] Cash per slot:', cashPerSlot);
-
-        if (cashPerSlot < 1000) {
-            return { type: "wait", message: "Not enough cash per slot..." };
-        }
-
-        // Get recently bought quantities
-        let recentlyBought = new Map();
-        try {
-            if (getRecentlyBoughtQuantities) {
-                recentlyBought = await getRecentlyBoughtQuantities(db, displayName);
-                console.log('[Suggestion Engine] Recently bought items:', recentlyBought.size);
-            }
-        } catch (error) {
-            console.warn('[Suggestion Engine] Error getting recently bought quantities:', error);
-        }
-
-        const blockedItemsSet = new Set(Array.isArray(blocked_items) ? blocked_items : []);
-        const itemIdsToFetch = Object.keys(marketData.latest)
-            .map(id => parseInt(id))
-            .filter(id => !isNaN(id) && !blockedItemsSet.has(id) && !activeOfferItemIds.has(id));
-
-        console.log('[Suggestion Engine] Items to analyze:', itemIdsToFetch.length);
-
-        if (itemIdsToFetch.length === 0) {
-            return { type: "wait", message: "No items to analyze..." };
-        }
-
-        // Fetch bulk timeseries data
-        let allTimeseries;
-        try {
-            console.log('[Suggestion Engine] Fetching bulk timeseries...');
-            const timeframes = {
-    5: '5m',
-    30: '30m',
-    120: '2h',
-    480: '8h'
-};
-const apiTimeStep = timeframes[timeframe] || '5m';
-allTimeseries = await wikiApi.fetchBulkTimeseries(itemIdsToFetch, apiTimeStep);
-            console.log('[Suggestion Engine] Timeseries fetched:', allTimeseries?.size || 0);
-        } catch (error) {
-            console.error('[Suggestion Engine] Error fetching bulk timeseries:', error);
-            return { type: "wait", message: "Loading price history..." };
-        }
-
-        if (!allTimeseries || allTimeseries.size === 0) {
-            return { type: "wait", message: "Loading price history..." };
-        }
-
-        console.log(`[Ultimate Trader] Analyzing ${allTimeseries.size} items...`);
-
-        let allCandidates = [];
-
-        for (const [itemId, timeseries] of allTimeseries.entries()) {
-            try {
-                // Find mapping info for this item
-                const mappingInfo = mapping.find(m => m.id === itemId);
-                if (!mappingInfo || !mappingInfo.limit) continue;
-
-                // Use our new, ultimate price calculation logic
-                const { buyPrice, sellPrice } = calculateUltimatePrices(timeseries, timeframe);
-
-                if (!buyPrice || !sellPrice || buyPrice > cashPerSlot) continue;
-
-                const netProfitPerItem = Math.floor(sellPrice * (1 - TRADING_CONFIG.GE_TAX_RATE)) - buyPrice;
-
-                // Use the non-restrictive filter from tradingConfig.js
-                if (netProfitPerItem < TRADING_CONFIG.MIN_PROFIT_PER_ITEM) continue;
-
-                const roi = buyPrice > 0 ? netProfitPerItem / buyPrice : 0;
-                if (roi < TRADING_CONFIG.MIN_ROI) continue;
-
-                const remainingLimit = mappingInfo.limit - (recentlyBought.get(itemId) || 0);
-                const quantityToBuy = Math.min(Math.floor(cashPerSlot / buyPrice), remainingLimit);
-                if (quantityToBuy <= 0) continue;
-
-                const liquidityScore = calculateLiquidityScore(timeseries, mappingInfo.limit);
-                if (liquidityScore < TRADING_CONFIG.MIN_LIQUIDITY_SCORE) continue;
-
-                // Simple, non-AI score to rank the best opportunities
-                const score = (roi * 1000) + (liquidityScore * 1.5) + (netProfitPerItem);
-
-                allCandidates.push({
-                    itemId,
-                    itemName: mappingInfo.name,
-                    score,
-                    currentBuyPrice: buyPrice,
-                    currentSellPrice: sellPrice,
-                    quantityToBuy,
-                    totalProfit: netProfitPerItem * quantityToBuy,
-                    message: `Margin: ${netProfitPerItem} gp | ROI: ${roi.toFixed(2)}%`
-                });
-            } catch (error) {
-                console.warn(`[Suggestion Engine] Error analyzing item ${itemId}:`, error);
-                continue;
-            }
-        }
-
-        console.log('[Suggestion Engine] Candidates found:', allCandidates.length);
-
-        if (allCandidates.length === 0) {
-            return { type: "wait", message: "Monitoring for opportunities..." };
-        }
-
-        allCandidates.sort((a, b) => b.score - a.score);
-        const bestFlip = allCandidates[0];
-
-        console.log(`[Ultimate Trader] Found ${allCandidates.length} candidates. Best: ${bestFlip.itemName} (${bestFlip.itemId})`);
-
-        return {
-            type: "buy",
-            message: bestFlip.message,
-            item_id: bestFlip.itemId,
-            price: bestFlip.currentBuyPrice,
-            quantity: bestFlip.quantityToBuy,
-            name: bestFlip.itemName,
-        };
-    } catch (error) {
-        console.error('[Suggestion Engine] Error in getSuggestions:', error);
-        return { type: "wait", message: "Engine error, retrying..." };
-    }
+        const bbResult = BollingerBands.calculate({ period: 20, values: priceValues, stdDev: 2 });
+        const latestBB = bbResult[bbResult.length - 1];
+        if (latestPrice <= latestBB.lower) score += 2; // Strong "buy" signal
+        else if (latestPrice <= latestBB.middle) score += 1;
+    } catch (e) { /* ignore */ }
+    try {
+        const rsiResult = RSI.calculate({ values: priceValues, period: 14 });
+        if (rsiResult[rsiResult.length - 1] < 45) score += 1; // "Oversold" signal
+    } catch (e) { /* ignore */ }
+    try {
+        const macdResult = MACD.calculate({ values: priceValues, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
+        if (macdResult[macdResult.length - 1].MACD > macdResult[macdResult.length - 1].signal) score += 1; // "Bullish momentum" signal
+    } catch (e) { /* ignore */ }
+    return score;
 }
 
-module.exports = { getSuggestions };
+/**
+ * Performs the deep analysis to generate a ranked list of the best trading candidates.
+ */
+async function generateRankedCandidateList(userState, db) {
+    const { gp = 0, offers = [], displayName } = userState || {};
+
+    await wikiApi.ensureMarketDataIsFresh();
+    const marketData = wikiApi.getMarketData();
+    if (!marketData || !marketData.latest || !marketData.mapping) return [];
+
+    // Corrected "Don't Re-buy" logic, checking only active GE offers.
+    const inProgressItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.itemId));
+    
+    const emptySlots = 8 - inProgressItemIds.size;
+    if (emptySlots <= 0) return [];
+    
+    const cashPerSlot = Math.floor(gp / emptySlots);
+    if (cashPerSlot < config.TRADING_CONFIG.MIN_CASH_PER_SLOT) return [];
+
+    let profitableCandidates = [];
+    for (const item of marketData.mapping) {
+        if (inProgressItemIds.has(item.id)) continue;
+        const latestData = marketData.latest[item.id];
+        if (!latestData || !latestData.high || !latestData.low || latestData.low > cashPerSlot) continue;
+        const netProfitPerItem = Math.floor(latestData.high * (1 - config.TRADING_CONFIG.GE_TAX_RATE)) - latestData.low;
+        if (netProfitPerItem >= config.TRADING_CONFIG.QUANT_MIN_PROFIT_PER_UNIT_GP) {
+            profitableCandidates.push({ ...item, latestData, netProfitPerItem });
+        }
+    }
+    
+    const recentlyBought = await require('./buyLimitTracker').getRecentlyBoughtQuantities(db, displayName);
+    let finalCandidates = [];
+    
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < profitableCandidates.length; i += BATCH_SIZE) {
+        const batch = profitableCandidates.slice(i, i + BATCH_SIZE);
+        const analysisPromises = batch.map(async (candidate) => {
+            const timeseriesResponse = await wikiApi.fetchTimeseriesForItem(candidate.id, '5m');
+            if (!timeseriesResponse || timeseriesResponse.length < 26) return null;
+            const score = getDaBeagleBossScore(timeseriesResponse);
+            if (score < (config.TRADING_CONFIG.SCORE_THRESHOLD || 2)) return null;
+            let quantityToBuy = Math.floor(cashPerSlot / candidate.latestData.low);
+            const remainingLimit = candidate.limit - (recentlyBought.get(candidate.id) || 0);
+            quantityToBuy = Math.min(quantityToBuy, remainingLimit);
+            if (quantityToBuy <= 0) return null;
+            return {
+                itemId: candidate.id, itemName: candidate.name, score,
+                currentBuyPrice: candidate.latestData.low, quantityToBuy
+            };
+        });
+        const settledResults = await Promise.allSettled(analysisPromises);
+        finalCandidates.push(...settledResults.filter(res => res.status === 'fulfilled' && res.value).map(res => res.value));
+    }
+    
+    finalCandidates.sort((a, b) => b.score - a.score);
+    return finalCandidates;
+}
+
+
+/**
+ * Main exported function that serves suggestions instantly from the cache.
+ */
+async function getSuggestionWithCaching(userState, db, displayName) {
+    const now = Date.now();
+    const activeOfferItemIds = new Set(userState.offers?.filter(o => o.status !== 'empty').map(o => o.itemId));
+    
+    // Check if the cache is stale. If so, perform the heavy analysis to refresh it.
+    if (now >= lastCacheTime + config.TRADING_CONFIG.SUGGESTION_POLL_INTERVAL_SECONDS * 1000) {
+        console.log("[Cache] Smart Cache is stale. Performing deep analysis...");
+        cachedTopCandidates = await generateRankedCandidateList(userState, db, displayName);
+        lastCacheTime = now;
+        recentlySuggested.clear(); // Reset short-term memory with the cache
+        console.log(`[Cache] Refresh complete. Found ${cachedTopCandidates.length} high-quality candidates.`);
+    }
+
+    // Now, serve an instant suggestion from the fresh cache.
+    if (cachedTopCandidates.length > 0) {
+        for (const candidate of cachedTopCandidates) {
+            // Check against active offers AND recently suggested items
+            if (!activeOfferItemIds.has(candidate.itemId) && !recentlySuggested.has(candidate.itemId)) {
+                recentlySuggested.add(candidate.itemId); // Remember we suggested this one
+                return {
+                    type: "buy", message: `DaBeagleBoss Score: ${candidate.score}`,
+                    item_id: candidate.itemId, price: candidate.currentBuyPrice,
+                    quantity: candidate.quantityToBuy, name: candidate.itemName,
+                };
+            }
+        }
+    }
+
+    // If all cached items are in use or recently suggested, wait.
+    return { type: "wait", message: "Monitoring for new opportunities..." };
+}
+
+module.exports = { getSuggestionWithCaching };
