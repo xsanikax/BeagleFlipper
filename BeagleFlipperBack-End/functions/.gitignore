@@ -1,2 +1,10 @@
-node_modules/
-*.local
+.gradle
+build
+.idea/
+.project
+.settings/
+.classpath
+nbactions.xml
+nb-configuration.xml
+nbproject/
+.DS_Store

@@ -1,54 +1,45 @@
-// buyLimitTracker.js
-// VERSION: Data Type Fix
-// This version safely handles different data types for the 'time' field,
-// resolving the 'transaction.time.toMillis is not a function' error.
+// buyLimitTracker.js - REPAIRED
 
-const admin = require('firebase-admin');
-
+/**
+ * Fetches recent purchase quantities from Firestore to enforce GE limits.
+ * This version correctly queries the 'trade_logs' collection that is now being
+ * populated by the updated tradingLogic.js.
+ *
+ * @param {Firestore} db - The initialized Firestore database instance.
+ * @param {string} displayName - The player's display name to query logs.
+ * @returns {Map} A map of { itemId: totalQuantityBoughtInLast4Hours }.
+ */
 async function getRecentlyBoughtQuantities(db, displayName) {
+    // Set the timestamp for 4 hours ago
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000);
     const recentlyBought = new Map();
-    if (!db || !displayName) {
-        console.error("getRecentlyBoughtQuantities: Missing db or displayName");
-        return recentlyBought;
+
+    try {
+        const tradeLogsRef = db.collection('trade_logs');
+        // Query for 'buy' transactions from the specified user within the last 4 hours
+        const snapshot = await tradeLogsRef
+            .where('user', '==', displayName)
+            .where('type', '==', 'buy')
+            .where('timestamp', '>=', fourHoursAgo)
+            .get();
+
+        if (snapshot.empty) {
+            // No recent buy transactions found
+            return recentlyBought;
+        }
+
+        // Aggregate the quantities for each item
+        snapshot.forEach(doc => {
+            const trade = doc.data();
+            const currentQty = recentlyBought.get(trade.item_id) || 0;
+            recentlyBought.set(trade.item_id, currentQty + trade.quantity);
+        });
+
+    } catch (error) {
+        console.error("Error fetching recent buy quantities:", error.message);
     }
 
-    // 4 hours in milliseconds
-    const fourHoursAgoMs = Date.now() - (4 * 60 * 60 * 1000);
-
-    const flipsRef = db.collection('users').doc(displayName).collection('flips');
-
-    // This query gets all flips and filters in memory.
-    const snapshot = await flipsRef.get();
-
-    snapshot.forEach(doc => {
-        const flip = doc.data();
-        if (flip.transactions_history && Array.isArray(flip.transactions_history)) {
-            flip.transactions_history.forEach(transaction => {
-                if (transaction.type === 'buy') {
-                    // --- THE FIX ---
-                    // This block now correctly handles both Timestamp objects and raw numbers.
-                    let transactionTimeMs = 0;
-                    if (transaction.time && typeof transaction.time.toMillis === 'function') {
-                        // It's a modern Firestore Timestamp object
-                        transactionTimeMs = transaction.time.toMillis();
-                    } else if (typeof transaction.time === 'number') {
-                        // It's an old Unix timestamp, likely in seconds. Convert to milliseconds.
-                        transactionTimeMs = transaction.time * 1000;
-                    } else {
-                        // Cannot determine the time, so we skip this transaction
-                        // to prevent a crash.
-                        return;
-                    }
-
-                    if (transactionTimeMs > fourHoursAgoMs) {
-                        const currentQuantity = recentlyBought.get(transaction.item_id) || 0;
-                        recentlyBought.set(transaction.item_id, currentQuantity + transaction.quantity);
-                    }
-                }
-            });
-        }
-    });
-
+    // Return the map of recently bought item quantities
     return recentlyBought;
 }
 

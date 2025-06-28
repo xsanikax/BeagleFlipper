@@ -1,75 +1,130 @@
-/**
- * Generates a trading suggestion based on a simple, logic-only 8-hour strategy.
- * This file is now 100% AI-FREE and uses the correct dependency pattern.
- */
-async function getEightHourSuggestion(userState, db, displayName, timeframe, dependencies) {
-    const { TRADING_CONFIG, TARGET_COMMODITIES, wikiApi, getRecentlyBoughtQuantities } = dependencies;
+// back-end/eightHourStrategy.js - Corrected
+const wikiApi = require('./wikiApiHandler');
+const modelRunner = require('./model_runner_8h');
+const { getRecentlyBoughtQuantities } = require('./buyLimitTracker');
 
-    const { inventory = [], offers = [], blocked_items = [], recently_suggested = [] } = userState || {};
-    const blockedItemsSet = new Set(blocked_items);
-    const recentlySuggestedSet = new Set(recently_suggested);
-    const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
+const TAX_RATE = 0.01;
+
+const CONFIG_8H = {
+    MIN_VOLUME_PER_HOUR: 50,
+    MIN_CASH_PER_SLOT: 1000,
+    AI_CONFIDENCE_THRESHOLD: 0.65,
+    MIN_PROFIT_GP: 10,
+    MIN_PROFIT_PERCENT: 0.05,
+    MAX_PRICE_UPDATE_AGE_HOURS: 2
+};
+
+async function prepareAIMarketData(itemId, latestData) {
+    try {
+        const timeseries = await wikiApi.fetchTimeseriesForItem(itemId, '5m');
+        if (!timeseries || timeseries.length === 0) {
+            return null;
+        }
+
+        const recent = timeseries.slice(-24);
+        const latest = recent[recent.length - 1];
+
+        const prices = recent.map(t => (t.avgHighPrice + t.avgLowPrice) / 2).filter(p => p > 0);
+        if (prices.length < 12) return null; // Need at least an hour of data
+
+        const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
+        const volatility = Math.sqrt(prices.map(x => Math.pow(x - avgPrice, 2)).reduce((a, b) => a + b, 0) / prices.length) / avgPrice;
+
+        const momentum = (latest.avgHighPrice - prices[0]) / prices[0];
+
+        return {
+            instant_buy_price: latestData.high,
+            instant_sell_price: latestData.low,
+            daily_volume: latestData.highPriceVolume + latestData.lowPriceVolume,
+            current_spread: latestData.high - latestData.low,
+            volatility: volatility,
+            momentum: momentum,
+        };
+    } catch (error) {
+        console.error(`[AI PREP] Error for item ${itemId}:`, error);
+        return null;
+    }
+}
+
+async function getEightHourSuggestion(userState, db, displayName) {
+    console.log(`\n=== STARTING 8-HOUR AI STRATEGY ===`);
 
     await wikiApi.ensureMarketDataIsFresh();
     const marketData = wikiApi.getMarketData();
-    if (!marketData.latest || !marketData.mapping) {
-        return { type: "wait", message: "Waiting for 8h market data..." };
+    if (!marketData || !marketData.latest) {
+      return { type: "wait" };
     }
 
-    const emptySlots = offers.filter(offer => offer.status === 'empty').length;
-    if (emptySlots === 0) return { type: "wait", message: "All slots active." };
+    const { inventory = [], offers = [] } = userState;
+    const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
+    const cashAmount = inventory.find(i => i.id === 995)?.amount || 0;
 
-    const availableCash = inventory.find(item => item.id === 995)?.amount || 0;
-    const cashPerSlot = Math.floor(availableCash / emptySlots);
-    const minCash = TRADING_CONFIG.minCashPerSlot_8H || 10000;
-
-    if (cashPerSlot < minCash) {
-        return { type: "wait", message: "Not enough cash for 8h strategy." };
+    if (cashAmount < CONFIG_8H.MIN_CASH_PER_SLOT) {
+      console.log(`[AI] Insufficient cash: ${cashAmount}`);
+      return { type: "wait" };
     }
 
-    const recentlyBought = await getRecentlyBoughtQuantities(db, displayName);
-    const commodityIds = Object.keys(TARGET_COMMODITIES);
-    let candidates = [];
+    const recentlyBoughtMap = await getRecentlyBoughtQuantities(db, displayName);
+    const candidates = [];
 
-    for (const itemIdStr of commodityIds) {
-        const itemId = parseInt(itemIdStr);
-        if (blockedItemsSet.has(itemId) || recentlySuggestedSet.has(itemId) || activeOfferItemIds.has(itemId)) continue;
+    for (const itemIdStr in marketData.latest) {
+        const itemId = parseInt(itemIdStr, 10);
+        if (activeOfferItemIds.has(itemId)) continue;
 
-        const itemData = marketData.latest[itemId];
-        if (!itemData || !itemData.high || !itemData.low || itemData.high <= itemData.low) continue;
+        const latestData = marketData.latest[itemId];
+        const mappingInfo = marketData.mapping.find(m => m.id === itemId);
 
-        const profit = Math.floor(itemData.high * (1 - TRADING_CONFIG.geTaxRate)) - itemData.low;
-        if (profit < TRADING_CONFIG.minProfit) continue;
+        if (!mappingInfo || !latestData || !mappingInfo.tradeable_on_ge) continue;
 
-        const roi = (profit / itemData.low) * 100;
-        if (roi < TRADING_CONFIG.minROI) continue;
+        const aiMarketData = await prepareAIMarketData(itemId, latestData);
+        if (!aiMarketData) continue;
 
-        if (itemData.low > cashPerSlot || itemData.low > TRADING_CONFIG.maxBuyPrice) continue;
+        const aiPrediction = await modelRunner.run(aiMarketData);
+        if (!aiPrediction || aiPrediction.confidence < CONFIG_8H.AI_CONFIDENCE_THRESHOLD) continue;
 
-        const itemConfig = TARGET_COMMODITIES[itemId];
-        const remainingLimit = itemConfig.limit - (recentlyBought.get(itemId) || 0);
-        if (remainingLimit <= 0) continue;
+        const buyPrice = Math.round(aiPrediction.buy_price);
+        const sellPrice = Math.round(aiPrediction.sell_price);
 
-        const quantityToBuy = Math.min(Math.floor(cashPerSlot / itemData.low), remainingLimit);
-        if (quantityToBuy > 0) {
-            candidates.push({ itemId, name: itemConfig.name, buyPrice: itemData.low, profit, roi, quantityToBuy });
-        }
+        const profitGP = (sellPrice * (1 - TAX_RATE)) - buyPrice;
+        const profitPercent = profitGP / buyPrice;
+
+        if (profitGP < CONFIG_8H.MIN_PROFIT_GP || profitPercent < CONFIG_8H.MIN_PROFIT_PERCENT) continue;
+
+        const limitRemaining = (mappingInfo.limit || 0) - (recentlyBoughtMap.get(itemId) || 0);
+        if (limitRemaining <= 0) continue;
+
+        const quantity = Math.min(Math.floor(cashAmount / buyPrice), limitRemaining);
+        if (quantity <= 0) continue;
+
+        candidates.push({
+            id: itemId, name: mappingInfo.name,
+            buyPrice, sellPrice, quantity,
+            profitGP, profitPercent,
+            confidence: aiPrediction.confidence,
+            marketData: aiMarketData,
+            score: aiPrediction.confidence * profitGP * quantity
+        });
     }
 
     if (candidates.length === 0) {
-        return { type: "wait", message: "No profitable 8h opportunities found." };
+        console.log('[AI] No confident opportunities found.');
+        return { type: "wait" };
     }
 
-    candidates.sort((a, b) => b.profit - a.profit);
-    const bestFlip = candidates[0];
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0];
 
+    console.log(`\n🏆 AI SELECTED: ${best.name}`);
+    console.log(`   🤖 AI Decision: Buy@${best.buyPrice} → Target@${best.sellPrice}`);
+    console.log(`   💰 Trade: ${best.quantity}x @ ${best.buyPrice}gp = ${(best.buyPrice * best.quantity).toLocaleString()}gp`);
+    console.log(`   📈 Expected: ${best.profitGP.toLocaleString()}gp profit (${(best.profitPercent*100).toFixed(1)}%)`);
+
+    // --- THE FIX: Return object no longer contains 'message' or 'name' ---
     return {
         type: "buy",
-        message: `Best 8h Flip by Profit: ${bestFlip.name}`,
-        item_id: bestFlip.itemId,
-        price: bestFlip.buyPrice,
-        quantity: bestFlip.quantityToBuy,
-        name: bestFlip.name,
+        item_id: best.id,
+        price: best.buyPrice,
+        quantity: best.quantity
     };
 }
 
