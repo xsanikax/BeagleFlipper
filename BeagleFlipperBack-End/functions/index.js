@@ -12,6 +12,7 @@ const { handleProfitTracking, handleLoadFlips } = require('./tradingLogic');
 const { handleLogin, handleRefreshToken, authenticateRequest } = require('./auth');
 // Import both suggestion functions from the repaired analytics files
 const { getHybridSuggestion, getPriceSuggestion } = require('./hybridAnalytics');
+const { getF2pSuggestion } = require('./f2pAnalytics');
 const { getEightHourSuggestion } = require('./eightHourStrategy');
 
 admin.initializeApp();
@@ -57,27 +58,38 @@ exports.api = onRequest({ timeoutSeconds: 30 }, async (req, res) => {
 
         // The request path is used to route to the correct logic
         switch (req.path) {
-            case "/suggestion":
-                if (!displayName) {
-                    return res.status(400).json({ message: "Display name is required for suggestions." });
-                }
+           case "/suggestion":
+                           // --- START OF DIAGNOSTIC LOG ---
+                           console.log("Received /suggestion request with body:", JSON.stringify(req.body, null, 2));
+                           // --- END OF DIAGNOSTIC LOG ---
 
-                // FIXED: Extract timeframe from request and route to correct strategy
-                const timeframe = req.body.timeframe || 5; // Default to 5 minutes if not specified
+                           if (!displayName) {
+                               return res.status(400).json({ message: "Display name is required for suggestions." });
+                           }
 
-                let suggestion;
-                if (timeframe === 5) {
-                    // Use 5-minute strategy
-                    suggestion = await getHybridSuggestion(req.body, db, displayName, timeframe);
-                } else if (timeframe === 480) {
-                    // Use 8-hour strategy (480 minutes = 8 hours)
-                    suggestion = await getEightHourSuggestion(req.body, db, displayName, timeframe);
-                } else {
-                    // Default to 5-minute strategy for unknown timeframes
-                    suggestion = await getHybridSuggestion(req.body, db, displayName, 5);
-                }
+                           const { preferences, timeframe } = req.body;
+                           let suggestion;
 
-                return res.status(200).json(suggestion);
+                           // This is the corrected logic, built from your file.
+                           // It now checks for the correct property: "f2pOnlyMode"
+                           if (preferences && preferences.f2pOnlyMode) {
+                               console.log("Routing to F2P analytics engine.");
+                               suggestion = await getF2pSuggestion(req.body, db, displayName, timeframe);
+                           } else {
+                               // If not F2P, use the original timeframe-based logic
+                               console.log("Routing to standard analytics engine based on timeframe.");
+                               const effectiveTimeframe = timeframe || 5;
+
+                               if (effectiveTimeframe === 5) {
+                                   suggestion = await getHybridSuggestion(req.body, db, displayName, effectiveTimeframe);
+                               } else if (effectiveTimeframe === 480) {
+                                   suggestion = await getEightHourSuggestion(req.body, db, displayName, effectiveTimeframe);
+                               } else {
+                                   suggestion = await getHybridSuggestion(req.body, db, displayName, 5);
+                               }
+                           }
+
+                           return res.status(200).json(suggestion);
 
             // NEW & REPAIRED: A single endpoint for getting manual price suggestions
             case "/prices":
