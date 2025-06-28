@@ -51,7 +51,7 @@ public class CopilotLoginController {
                 }
             } else {
                 LoginResponse loginResponse = loginResponseManager.getLoginResponse();
-                String message = (loginResponse != null && loginResponse.message != null) ? loginResponse.message : "Login failed";
+                String message = (loginResponse != null && loginResponse.getMessage() != null) ? loginResponse.getMessage() : "Login failed";
                 loginPanel.showLoginErrorMessage(message);
             }
             loginPanel.endLoading();
@@ -93,7 +93,8 @@ public class CopilotLoginController {
                 }
             } else {
                 LoginResponse loginResponse = loginResponseManager.getLoginResponse();
-                String message = (loginResponse != null && loginResponse.message != null) ? loginResponse.message : "Signup failed";
+                // FIXED: Changed .message to .getMessage() to fix the private access error.
+                String message = (loginResponse != null && loginResponse.getMessage() != null) ? loginResponse.getMessage() : "Signup failed";
                 signupPanel.showSignupErrorMessage(message);
             }
             signupPanel.endLoading();

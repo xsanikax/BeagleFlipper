@@ -1,11 +1,13 @@
 // functions/tradingConfig.js
 // ENHANCED TRADING CONFIGURATION
 // Centralized configuration for all trading strategies
-
 const TRADING_CONFIG = {
+    // --- ADD THIS LINE ---
+    FIREBASE_WEB_API_KEY: "AIzaSyDspCsPLP5hpVnRCE-qYSdUbM8w-eMCJcY",
+
     // Tax and profit settings
     GE_TAX_RATE: 0.02,                    // 2% GE tax rate
-    MIN_PROFIT_PER_ITEM: 1,              // Minimum profit per item in GP
+    MIN_PROFIT_PER_ITEM: 1,                 // Minimum profit per item in GP
     MIN_MARGIN_PERCENTAGE: 0.01,         // 1% minimum margin
 
     // Volume and liquidity requirements
@@ -30,13 +32,14 @@ const TRADING_CONFIG = {
     // Time settings
     BUY_LIMIT_RESET_HOURS: 4,            // Buy limit resets every 4 hours
 
-    // Pricing window settings (in snapshots, each snapshot = 5 minutes)
-    BUY_SNAPSHOT_WINDOW: 4,              // 4 snapshots = 20 minutes for buy price analysis
-    SELL_SNAPSHOT_WINDOW: 8,             // 8 snapshots = 40 minutes for sell price analysis
+    // --- Pricing window settings (in snapshots, each snapshot = 5 minutes) ---
+    // NOTE: Use TRADING_HELPERS.getBuyWindowDescription() etc. to see the calculated time in your logs.
+    BUY_SNAPSHOT_WINDOW: 3,              // The number of 5-minute snapshots for buy price analysis
+    SELL_SNAPSHOT_WINDOW: 5,             // The number of 5-minute snapshots for sell price analysis
 
     // Volatility detection settings
     VOLATILITY_THRESHOLD: 0.25,          // 25% price change to trigger opportunity pricing
-    OPPORTUNITY_WINDOW: 3,               // 3 snapshots = 15 minutes for current market conditions
+    OPPORTUNITY_WINDOW: 3,               // The number of 5-minute snapshots for current market conditions
 
     // Scoring weights
     PRIORITY_ITEM_MULTIPLIER: 2.0,
@@ -88,62 +91,45 @@ const TRADING_HELPERS = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════════
-// 🎯 F2P ITEM COLLECTION - Complete Free-to-Play Trading Arsenal
+// 🎯 F2P ITEM COLLECTION - Curated Free-to-Play Trading Arsenal
 // ═══════════════════════════════════════════════════════════════════════════════════
 const F2P_ITEM_IDS = new Set([
-    // 🔥 Elemental Runes - Foundation of Magic
-    554,    // Fire rune        556,    // Air rune         557,    // Earth rune
-    555,    // Water rune       558,    // Mind rune        559,    // Body rune
-    560,    // Death rune       561,    // Nature rune      562,    // Chaos rune
-    563,    // Law rune         564,    // Cosmic rune      565,    // Blood rune
-    566,    // Soul rune
-
-    // 🏹 Arrows - Ranged Combat Arsenal
-    882,    // Bronze arrow     884,    // Iron arrow       886,    // Steel arrow
-    888,    // Adamant arrow    890,    // Mithril arrow    892,    // Rune arrow
-
-    // ⚔️ Melee Weapons - Warrior's Arsenal
-    1117,   // Iron scimitar    1127,   // Iron longsword   1115,   // Iron dagger
-    1121,   // Iron mace        1123,   // Iron sword       1333,   // Rune scimitar
-    1323,   // Rune longsword   1321,   // Rune dagger      1325,   // Rune mace
-    1327,   // Rune sword       1329,   // Rune battleaxe   1331,   // Rune 2h sword
-
-    // 🛡️ Armor & Protection
-    1103,   // Iron helm        1101,   // Iron platebody   1105,   // Iron platelegs
-    1107,   // Iron plateskirt  1109,   // Iron full helm   1111,   // Iron kiteshield
-    1113,   // Iron med helm    1075,   // Iron square shield 1065, // Iron chainbody
-    1205,   // Black helm       1209,   // Black platebody  1213,   // Black platelegs
-    1215,   // Black plateskirt 1211,   // Black full helm  1217,   // Black kiteshield
-
-    // 🍖 Food & Sustenance
-    315,    // Shrimps          379,    // Lobster          385,    // Shark
-    1965,   // Cabbage          1967,   // Potato           2309,   // Tuna potato
-    1957,   // Onion
-
-    // ⛏️ Raw Materials - Ores & Bars
-    436,    // Copper ore       438,    // Tin ore          440,    // Iron ore
-    442,    // Silver ore       444,    // Gold ore         447,    // Coal
-    449,    // Adamantite ore   451,    // Runite ore       453,    // Coal
-    2349,   // Bronze bar       2351,   // Iron bar         2353,   // Steel bar
-    2355,   // Mithril bar      2357,   // Adamantite bar   2359,   // Runite bar
-    2361,   // Gold bar         2363,   // Silver bar
-
-    // 💎 Jewelry & Accessories
-    1635,   // Gold ring        1637,   // Sapphire ring    1639,   // Emerald ring
-    1641,   // Ruby ring        1643,   // Diamond ring     1654,   // Gold necklace
-    1656,   // Sapphire necklace 1658,  // Emerald necklace 1660,   // Ruby necklace
-    1662,   // Diamond necklace 1692,   // Gold amulet      1694,   // Sapphire amulet
-    1696,   // Emerald amulet   1698,   // Ruby amulet      1700,   // Diamond amulet
-
-    // 🌳 Woodcutting Resources
-    1511,   // Logs             1513,   // Oak logs         1515,   // Willow logs
-    1517,   // Maple logs       1519,   // Yew logs         1521,   // Magic logs
-
-    // 🔧 Essential Items
-    995,    // Coins            1351,   // Axe              590,    // Tinderbox
-    1925,   // Bucket           1931,   // Pot              1935,   // Jug
-    1755,   // Chisel
+    // 🔥 Elemental Runes (High Volume)
+    554, 555, 556, 557, 558, 562,
+    // 🏹 Ammunition (Consistent Demand)
+    882, 884, 886, 888, 890, 892,
+    // 🍖 Food & Potions (Consumables)
+    379, 361, 339, 373, 113, 2428, 2430,
+    // ⛏️ Ores & Bars (Skilling Materials)
+    436, 438, 440, 442, 444, 447, 449, 451,
+    2349, 2351, 2353, 2355, 2357, 2359, 2361, 2363,
+    // 🌳 Logs (Skilling Materials)
+    1511, 1521, 1519, 1517, 1515,
+    // 🛡️ Armor & Weapons (Rune, Adamant, Green D'hide)
+    1333, 1347, 1127, 1163, 1185, 1213,
+    1123, 1161, 1181, 1209,
+    1119, 1157, 1179, 1207,
+    1079, 1093, 1128, 1165,
+    // 💎 Jewelry (Amulets & Uncuts)
+    1692, 1694, 1696, 1698, 1700, 1702, 1704,
+    1617, 1619, 1621, 1623,
+    // 🐄 Hides
+    1747, 1749, 1751, 1753,
 ]);
+
+// 🌟 F2P_STAPLE_ITEMS - Priority Scanning for F2P
+const F2P_STAPLE_ITEMS = new Set([
+    554,     // Fire rune
+    556,     // Air rune
+    562,     // Chaos rune
+    892,     // Rune arrow
+    379,     // Lobster
+    440,     // Iron ore
+    453,     // Coal
+    1333,    // Rune scimitar
+    1704,    // Amulet of power
+]);
+
 
 // ═══════════════════════════════════════════════════════════════════════════════════
 // 🎯 TARGET COMMODITIES - Premium Trading Opportunities (Members Items)
@@ -240,7 +226,7 @@ const STABLE_ITEMS = new Set([
     440, 453, 1511, 1521, 1519, 1517, 1515, 1777,
 ]);
 
-// 🌟 STAPLE_ITEMS - Priority Scanning Items
+// 🌟 STAPLE_ITEMS - Priority Scanning Items (Members)
 const STAPLE_ITEMS = new Set([
     2,       // Cannonball      - Combat essential
     560,     // Death rune      - High-level magic
@@ -259,4 +245,5 @@ module.exports = {
     STABLE_ITEMS,
     F2P_ITEM_IDS,
     STAPLE_ITEMS,
+    F2P_STAPLE_ITEMS, // Export the new F2P staples list
 };

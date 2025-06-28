@@ -404,7 +404,7 @@ async function getHybridSuggestion(userState, db, displayName) {
         return { type: 'wait' };
     }
 
-    // Sort by the most promising flip
+    // Sort by the most promising flip◙
     profitableFlips.sort(sortByQuickFlipScore);
     const bestFlip = profitableFlips[0];
 

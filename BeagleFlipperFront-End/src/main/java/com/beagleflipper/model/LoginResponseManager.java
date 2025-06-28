@@ -1,97 +1,86 @@
 package com.beagleflipper.model;
 
-import com.beagleflipper.controller.Persistance;
+import com.beagleflipper.controller.Persistance; // FIXED: Correctly imports from the 'controller' package
+import com.google.common.base.Strings;
 import com.google.gson.Gson;
-import com.google.gson.JsonIOException;
-import com.google.gson.JsonSyntaxException;
-import joptsimple.internal.Strings;
-import lombok.RequiredArgsConstructor;
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
-
-import javax.inject.Inject;
-import javax.inject.Singleton;
-import java.io.*;
-import java.nio.file.Files;
+import java.io.IOException;
 import java.util.concurrent.ScheduledExecutorService;
 
 
 @Slf4j
 @Singleton
-@RequiredArgsConstructor(onConstructor_ = @Inject)
 public class LoginResponseManager {
 
-    public static final String LOGIN_RESPONSE_JSON_FILE = "login-response.json";
-
-    private final File file = new File(Persistance.PARENT_DIRECTORY, LOGIN_RESPONSE_JSON_FILE);
-
-    // dependencies
-    private final Gson gson;
     private final ScheduledExecutorService executorService;
-
-    // state
     private LoginResponse cachedLoginResponse;
 
+    @Inject
+    public LoginResponseManager(Gson gson, ScheduledExecutorService executorService) {
+        this.executorService = executorService;
+    }
+
     public synchronized LoginResponse getLoginResponse() {
-        if(cachedLoginResponse != null) {
-            return cachedLoginResponse;
+        if (cachedLoginResponse == null) {
+            cachedLoginResponse = load();
         }
-        cachedLoginResponse = load();
         return cachedLoginResponse;
     }
 
     public synchronized void setLoginResponse(LoginResponse loginResponse) {
         if (loginResponse == null) {
+            reset();
             return;
         }
         cachedLoginResponse = loginResponse;
         saveAsync();
     }
 
-    public boolean isLoggedIn() {
-        LoginResponse loginResponse = getLoginResponse();
-        return loginResponse != null && !loginResponse.error && !Strings.isNullOrEmpty(loginResponse.jwt);
+    public LoginResponse load() {
+        try {
+            // FIXED: Calls the correct 'loadLoginResponse' method from your Persistance class
+            LoginResponse loginResponse = Persistance.loadLoginResponse();
+
+            if (loginResponse != null && Strings.isNullOrEmpty(loginResponse.getJwt())) {
+                log.warn("Loaded login response file but jwt was missing, deleting it.");
+                Persistance.deleteLoginResponse(); // Use the helper to delete
+                return null;
+            }
+            return loginResponse;
+        } catch (IOException e) {
+            log.warn("Could not load login response from file.", e);
+            // If there's an error reading the file, it might be corrupt, so delete it.
+            Persistance.deleteLoginResponse();
+            return null;
+        }
     }
 
     public void reset() {
         cachedLoginResponse = null;
-        if (file.exists()) {
-            if(!file.delete()) {
-                log.warn("failed to delete login response file {}", file);
-            }
-        }
+        // FIXED: Calls the correct 'deleteLoginResponse' method from your Persistance class
+        Persistance.deleteLoginResponse();
     }
 
     public void saveAsync() {
         executorService.submit(() -> {
-            synchronized (file) {
-                LoginResponse loginResponse = getLoginResponse();
-                if (loginResponse != null) {
-                    try {
-                        String json = gson.toJson(loginResponse);
-                        Files.write(file.toPath(), json.getBytes());
-                    } catch (IOException e) {
-                        log.warn("error saving login response {}", e.getMessage(), e);
-                    }
-                }
+            LoginResponse loginResponse = getLoginResponse();
+            if (loginResponse == null) {
+                return;
             }
+            // FIXED: Calls the correct 'saveLoginResponse' method from your Persistance class
+            Persistance.saveLoginResponse(loginResponse);
         });
     }
 
-    public LoginResponse load() {
-        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-            return gson.fromJson(reader, LoginResponse.class);
-        } catch (FileNotFoundException ignored) {
-            return null;
-        } catch (JsonSyntaxException | JsonIOException | IOException e) {
-            log.warn("error loading saved login json file {}", file, e);
-            return null;
-        }
+    public boolean isLoggedIn() {
+        LoginResponse response = getLoginResponse();
+        return response != null && !response.isError() && !Strings.isNullOrEmpty(response.getJwt());
     }
 
     public String getJwtToken() {
-        if(!isLoggedIn()) {
-            return null;
-        }
-        return getLoginResponse().getJwt();
+        LoginResponse response = getLoginResponse();
+        return response != null ? response.getJwt() : null;
     }
 }
