@@ -329,10 +329,15 @@ async function getF2pSuggestion(userState, db, displayName) {
         return { type: 'wait', message: 'Sell-only mode: No F2P items available to sell. Complete current trades or add items to inventory.' };
     }
 
-    // --- STEP 3: Check for GE Slots and Cash ---
-    const emptySlots = offers.filter(o => o.status === 'empty');
+    // --- STEP 3: Check for GE Slots and Cash (with F2P Slot Limiter) ---
+    // In F2P mode, we only want to consider the first 3 GE slots.
+    const offersToConsider = isF2pMode ? offers.slice(0, 3) : offers;
+
+    console.log(`[DEBUG] F2P: Now considering ${offersToConsider.length} GE slots.`);
+
+    const emptySlots = offersToConsider.filter(o => o.status === 'empty');
     if (!emptySlots.length) {
-        console.log('[DEBUG] F2P: No empty slots available');
+        console.log('[DEBUG] F2P: No empty slots available within the considered range.');
         return { type: 'wait', message: 'No empty GE slots available' };
     }
 
@@ -341,6 +346,8 @@ async function getF2pSuggestion(userState, db, displayName) {
         console.log(`[DEBUG] F2P: Insufficient cash: ${cashAmount} (need at least ${TRADING_CONFIG.MIN_CASH_PER_SLOT})`);
         return { type: 'wait', message: `Insufficient cash: ${cashAmount.toLocaleString()}gp` };
     }
+
+    // The cash will now be correctly divided among the available empty slots (max 3 in F2P).
     const cashPerSlot = Math.floor(cashAmount / emptySlots.length);
 
     // --- STEP 4: Get Buy Limits & Active Slot Counts ---
