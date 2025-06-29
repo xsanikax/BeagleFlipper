@@ -1,23 +1,19 @@
-// index.js
-// This version is based on the user's original file, restoring the correct
-// v2 function syntax and EU server region. It adds a single, working endpoint
-// for price suggestions.
-// FIXED: Now properly routes timeframe to correct strategy functions
-// it is fucking changed yes it fucking is
+// index.js - FIXED VERSION WITH CENTRALIZED STATE HANDLING
+// This version properly prepares the userState for the analytics functions,
+// ensuring that skip, block, and toggle states are respected.
+
 const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { handleProfitTracking, handleLoadFlips } = require('./tradingLogic');
 const { handleLogin, handleRefreshToken, authenticateRequest } = require('./auth');
-// Import both suggestion functions from the repaired analytics files
 const { getHybridSuggestion, getPriceSuggestion } = require('./hybridAnalytics');
 const { getF2pSuggestion } = require('./f2pAnalytics');
 const { getEightHourSuggestion } = require('./eightHourStrategy');
 
 admin.initializeApp();
 const db = admin.firestore();
-// REPAIRED: Server region is correctly set to europe-west2
 setGlobalOptions({ region: "europe-west2" });
 
 async function handleSignup(req, res) {
@@ -53,45 +49,86 @@ exports.api = onRequest({ timeoutSeconds: 30 }, async (req, res) => {
 
     // All endpoints below this require authentication
     return authenticateRequest(req, res, async () => {
-        // This correctly handles getting the display name from either the body or query
         const displayName = req.body.display_name || req.query.display_name;
 
-        // The request path is used to route to the correct logic
         switch (req.path) {
-           case "/suggestion":
-                           // --- START OF DIAGNOSTIC LOG ---
-                           console.log("Received /suggestion request with body:", JSON.stringify(req.body, null, 2));
-                           // --- END OF DIAGNOSTIC LOG ---
+            case "/suggestion":
+                console.log("=== SUGGESTION REQUEST START ===");
+                console.log("Request body:", JSON.stringify(req.body, null, 2));
 
-                           if (!displayName) {
-                               return res.status(400).json({ message: "Display name is required for suggestions." });
-                           }
+                if (!displayName) {
+                    return res.status(400).json({ message: "Display name is required for suggestions." });
+                }
 
-                           const { preferences, timeframe } = req.body;
-                           let suggestion;
+                // Extract all relevant state from the client request.
+                const {
+                    preferences = {},
+                    timeframe,
+                    inventory = [],
+                    offers = [],
+                    sell_only_mode = false,
+                    skip_suggestion = false,
+                    blocked_items = [], // The user's permanent block list
+                    item_to_skip,      // The item ID from a "skip" button press
+                } = req.body;
 
-                           // This is the corrected logic, built from your file.
-                           // It now checks for the correct property: "f2pOnlyMode"
-                           if (preferences && preferences.f2pOnlyMode) {
-                               console.log("Routing to F2P analytics engine.");
-                               suggestion = await getF2pSuggestion(req.body, db, displayName, timeframe);
-                           } else {
-                               // If not F2P, use the original timeframe-based logic
-                               console.log("Routing to standard analytics engine based on timeframe.");
-                               const effectiveTimeframe = timeframe || 5;
+                // Create the exclusion list for this request.
+                // Start with the permanent block list.
+                const itemsToExclude = new Set(blocked_items.map(Number).filter(id => !isNaN(id)));
 
-                               if (effectiveTimeframe === 5) {
-                                   suggestion = await getHybridSuggestion(req.body, db, displayName, effectiveTimeframe);
-                               } else if (effectiveTimeframe === 480) {
-                                   suggestion = await getEightHourSuggestion(req.body, db, displayName, effectiveTimeframe);
-                               } else {
-                                   suggestion = await getHybridSuggestion(req.body, db, displayName, 5);
-                               }
-                           }
+                // If this is a skip request, add the specific item to the exclusion list for this one time.
+                if (skip_suggestion && item_to_skip) {
+                    itemsToExclude.add(Number(item_to_skip));
+                    console.log(`Temporarily skipping item ID: ${item_to_skip}`);
+                }
 
-                           return res.status(200).json(suggestion);
+                // Create a clean userState object. This is the single source of truth
+                // for the analytics functions. They should not manage their own state.
+                const userState = {
+                    blocked_items: Array.from(itemsToExclude), // Pass the combined exclusion list
+                    inventory: inventory || [],
+                    offers: offers || [],
+                    sell_only_mode: sell_only_mode === true, // Ensure boolean
+                    preferences: {
+                        ...preferences,
+                        f2pOnlyMode: preferences.f2pOnlyMode === true // Ensure boolean
+                    }
+                };
 
-            // NEW & REPAIRED: A single endpoint for getting manual price suggestions
+                console.log("Final userState for analytics:", JSON.stringify(userState, null, 2));
+
+                let suggestion;
+                try {
+                    // Route to the correct analytics engine based on user preferences.
+                    if (userState.preferences.f2pOnlyMode) {
+                        console.log("Routing to F2P analytics...");
+                        suggestion = await getF2pSuggestion(userState, db, displayName);
+                    } else {
+                        console.log("Routing to Hybrid/P2P analytics...");
+                        const effectiveTimeframe = timeframe || 5;
+
+                        if (effectiveTimeframe === 480) {
+                            console.log("Using 8-hour strategy");
+                            suggestion = await getEightHourSuggestion(userState, db, displayName, effectiveTimeframe);
+                        } else {
+                            console.log("Using hybrid strategy");
+                            suggestion = await getHybridSuggestion(userState, db, displayName);
+                        }
+                    }
+                } catch (error) {
+                    console.error("Critical error during suggestion generation:", error);
+                    suggestion = {
+                        type: 'wait',
+                        message: 'Error getting suggestion. Please try again.',
+                        error: error.message
+                    };
+                }
+
+                console.log("Final suggestion:", JSON.stringify(suggestion, null, 2));
+                console.log("=== SUGGESTION REQUEST END ===");
+
+                return res.status(200).json(suggestion);
+
             case "/prices":
                 const { itemId, type } = req.query;
                 if (!itemId || !type) {
@@ -107,7 +144,6 @@ exports.api = onRequest({ timeoutSeconds: 30 }, async (req, res) => {
                 return await handleLoadFlips(req, res, { db });
 
             case "/profit-tracking/rs-account-names":
-                // This can be expanded later if needed
                 return res.status(200).json({});
 
             default:

@@ -18,12 +18,11 @@ import java.util.Objects;
 public class AuthenticatedApiClient {
 
     // Define the media type for JSON content
-    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final OkHttpClient okHttpClient;
     private final Gson gson;
     private final LoginResponseManager loginResponseManager;
-    // FIXED: Inject the new ApiConfig class to get the base URL
     private final ApiConfig apiConfig;
 
     @Inject
@@ -31,7 +30,6 @@ public class AuthenticatedApiClient {
         this.okHttpClient = okHttpClient;
         this.gson = gson;
         this.loginResponseManager = loginResponseManager;
-        // FIXED: Store the injected ApiConfig
         this.apiConfig = apiConfig;
     }
 
@@ -75,7 +73,7 @@ public class AuthenticatedApiClient {
                 return gson.fromJson(responseBody.charStream(), responseType);
             }
 
-            // THIS IS THE KEY LOGIC: Check for an expired token
+            // Check for an expired token (HTTP 401)
             if (response.code() == 401) {
                 // Check if the server specifically told us the token is expired
                 if (isTokenExpiredError(response)) {
@@ -109,11 +107,9 @@ public class AuthenticatedApiClient {
         }
 
         String requestJson = "{\"refreshToken\": \"" + currentResponse.getRefreshToken() + "\"}";
-        // FIXED: Swapped arguments for older OkHttp versions. It's now create(MediaType, String).
         RequestBody body = RequestBody.create(JSON, requestJson);
 
         Request request = new Request.Builder()
-                // FIXED: Use the apiConfig to get the base URL
                 .url(apiConfig.getApiBase() + "/refresh-token")
                 .post(body)
                 .build();
@@ -133,7 +129,8 @@ public class AuthenticatedApiClient {
             RefreshTokenResponse refreshResponse = gson.fromJson(responseBody.charStream(), RefreshTokenResponse.class);
             if (refreshResponse != null && refreshResponse.getIdToken() != null) {
                 // SUCCESS! Update the stored JWT and save it.
-                currentResponse.updateJwt(refreshResponse.getIdToken());
+                // FIXED: Called the correct 'setJwt' method instead of 'updateJwt'
+                currentResponse.setJwt(refreshResponse.getIdToken());
                 loginResponseManager.setLoginResponse(currentResponse); // This also triggers saveAsync
                 return true;
             }
@@ -145,7 +142,6 @@ public class AuthenticatedApiClient {
 
     private Request buildGetRequest(String path) {
         return new Request.Builder()
-                // FIXED: Use the apiConfig to get the base URL
                 .url(apiConfig.getApiBase() + path)
                 .header("Authorization", "Bearer " + loginResponseManager.getJwtToken())
                 .get()
@@ -154,10 +150,8 @@ public class AuthenticatedApiClient {
 
     private Request buildPostRequest(String path, Object body) {
         String jsonBody = gson.toJson(body);
-        // FIXED: Swapped arguments for older OkHttp versions. It's now create(MediaType, String).
         RequestBody requestBody = RequestBody.create(JSON, jsonBody);
         return new Request.Builder()
-                // FIXED: Use the apiConfig to get the base URL
                 .url(apiConfig.getApiBase() + path)
                 .header("Authorization", "Bearer " + loginResponseManager.getJwtToken())
                 .post(requestBody)

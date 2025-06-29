@@ -2,6 +2,7 @@ package com.beagleflipper.model;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import java.util.List;
@@ -10,18 +11,22 @@ import java.util.Map;
 @Data
 @NoArgsConstructor
 public class AccountStatus {
+
+    private List<Integer> blockedItems;
+    private boolean sellOnlyMode;
     private String displayName;
     private Long accountHash;
     private boolean isMember;
     private boolean isF2pOnlyMode;
-    private boolean isSellOnlyMode;
-    private List<Integer> blockedItems;
     private int timeframe;
     private boolean isSuggestionsPaused;
     private boolean isSuggestionSkipped;
     private Inventory inventory;
     private StatusOfferList offers;
     private Map<Integer, Long> uncollected;
+
+    // This field will hold the ID of the item to skip when isSuggestionSkipped is true
+    private int itemToSkip;
 
     public boolean currentlyFlipping() {
         if (offers == null) return false;
@@ -43,16 +48,28 @@ public class AccountStatus {
         jsonObject.addProperty("account_hash", this.accountHash);
         jsonObject.addProperty("display_name", this.displayName);
         jsonObject.addProperty("is_member", this.isMember);
-        jsonObject.addProperty("is_f2p_only_mode", this.isF2pOnlyMode);
-        jsonObject.addProperty("is_sell_only_mode", this.isSellOnlyMode);
+
+        // --- STATE HANDLING FIXES ---
+        // The backend expects f2pOnlyMode to be nested within a preferences object.
+        JsonObject preferencesObject = new JsonObject();
+        preferencesObject.addProperty("f2pOnlyMode", this.isF2pOnlyMode);
+        jsonObject.add("preferences", preferencesObject);
+
+        // The backend expects this specific key name.
+        jsonObject.addProperty("sell_only_mode", this.sellOnlyMode);
+
+        // This ensures the skip request tells the server *which* item to skip.
+        jsonObject.addProperty("skip_suggestion", this.isSuggestionSkipped);
+        if (this.isSuggestionSkipped && this.itemToSkip > 0) {
+            jsonObject.addProperty("item_to_skip", this.itemToSkip);
+            jsonObject.addProperty("current_item_id", this.itemToSkip); // Also add as current_item_id for compatibility
+        }
+        // --- END OF STATE HANDLING FIXES ---
+
         jsonObject.add("blocked_items", gson.toJsonTree(this.blockedItems));
         jsonObject.addProperty("timeframe", this.timeframe);
         jsonObject.addProperty("is_suggestions_paused", this.isSuggestionsPaused);
-        jsonObject.addProperty("skip_suggestion", this.isSuggestionSkipped);
-
-        // FIX: This now sends the inventory as a proper array of items.
         jsonObject.add("inventory", gson.toJsonTree(this.inventory));
-
         jsonObject.add("offers", this.offers != null ? this.offers.toJson(gson) : null);
         jsonObject.add("uncollected", gson.toJsonTree(this.uncollected));
         jsonObject.addProperty("grand_exchange_open", grandExchangeOpen);

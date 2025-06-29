@@ -32,7 +32,7 @@ public class ApiRequestHandler {
     // --- HARDCODE YOUR BACKEND API URL HERE ---
     private static final String API_BASE_URL = "https://api-jxxf26wq5q-nw.a.run.app";
     // ADDED: URL for Google's token refresh API. Replace with your Web API Key.
-    private static final String FIREBASE_REFRESH_URL = "https://securetoken.googleapis.com/v1/token?key=[YOUR_FIREBASE_WEB_API_KEY]";
+    private static final String FIREBASE_REFRESH_URL = "https://securetoken.googleapis.com/v1/token?key=AIzaSyDspCsPLP5hpVnRCE-qYSdUbM8w-eMCJcY";
 
 
     public static final String DEFAULT_COPILOT_PRICE_ERROR_MESSAGE = "Unable to fetch price copilot price (possible server update)";
@@ -134,7 +134,6 @@ public class ApiRequestHandler {
             JsonObject payload = new JsonObject();
             payload.addProperty("email", email);
             payload.addProperty("password", password);
-            payload.addProperty("returnSecureToken", true);
             System.out.println("ApiRequestHandler: Payload created for signup.");
 
             Request request = new Request.Builder()
@@ -232,7 +231,7 @@ public class ApiRequestHandler {
 
             if (jsonResponse.has("id_token")) {
                 String newIdToken = jsonResponse.get("id_token").getAsString();
-                currentLogin.updateJwt(newIdToken);
+                currentLogin.setJwt(newIdToken);
                 if (jsonResponse.has("refresh_token")) {
                     currentLogin.setRefreshToken(jsonResponse.get("refresh_token").getAsString());
                 }

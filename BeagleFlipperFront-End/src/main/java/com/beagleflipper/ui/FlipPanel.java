@@ -21,30 +21,26 @@ public class FlipPanel extends JPanel {
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-        // Display quantity and item name
         JLabel itemQuantityAndName = new JLabel(String.format("%d x %s", flip.getClosedQuantity(), UIUtilities.truncateString(flip.getItemName(), 20)));
         itemQuantityAndName.setForeground(Color.WHITE);
 
-        // Create a sub-panel for the left side
         JPanel leftPanel = new JPanel();
         leftPanel.setLayout(new FlowLayout(FlowLayout.LEFT, 0, 0));
         leftPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         leftPanel.add(itemQuantityAndName);
 
-        // Display profit, with color based on profit/loss
+        // RESTORED: Displays the 'profit' field directly from the flip object
         JLabel profitLabel = new JLabel(UIUtilities.formatProfitWithoutGp(flip.getProfit()));
         profitLabel.setForeground(UIUtilities.getProfitColor(flip.getProfit(), config));
 
-        // Add the sub-panel to the LINE_START position
         add(leftPanel, BorderLayout.LINE_START);
         add(profitLabel, BorderLayout.LINE_END);
         setMaximumSize(new Dimension(Integer.MAX_VALUE, getPreferredSize().height));
 
-        // Tooltip for detailed information
-        String closeLabel = flip.getClosedQuantity() == flip.getOpenedQuantity() ? "Closed time" : "Partial close time";
+        String closeLabel = flip.getClosedQuantity() >= flip.getOpenedQuantity() ? "Closed time" : "Partial close time";
 
         String tooltipText = String.format("<html>" +
-                        "ID: %s<br>" + // Add ID for debugging
+                        "ID: %s<br>" +
                         "Item ID: %d<br>" +
                         "Account: %s<br>" +
                         "Opened time: %s<br>" +
@@ -62,20 +58,20 @@ public class FlipPanel extends JPanel {
                 flip.getAccountDisplayName(),
                 formatEpoch(flip.getOpenedTime()),
                 flip.getOpenedQuantity(),
-                UIUtilities.formatProfitWithoutGp(flip.getSpent()), // Format spent
+                UIUtilities.formatProfitWithoutGp(flip.getSpent()),
                 closeLabel,
                 formatEpoch(flip.getClosedTime()),
                 flip.getClosedQuantity(),
-                UIUtilities.formatProfitWithoutGp(flip.getReceivedPostTax()), // Format received
-                UIUtilities.formatProfitWithoutGp(flip.getTaxPaid()), // Format tax
-                UIUtilities.formatProfitWithoutGp(flip.getProfit()), // Format profit
+                UIUtilities.formatProfitWithoutGp(flip.getReceivedPostTax()),
+                UIUtilities.formatProfitWithoutGp(flip.getTaxPaid()), // Displays tax from the flip object
+                UIUtilities.formatProfitWithoutGp(flip.getProfit()), // Displays profit from the flip object
                 flip.isClosed()
         );
         setToolTipText(tooltipText);
     }
 
     public static String formatEpoch(long epochSeconds) {
-        if (epochSeconds <= 0) { // Handle uninitialized or 0 timestamps gracefully
+        if (epochSeconds <= 0) {
             return "n/a";
         }
         Instant instant = Instant.ofEpochSecond(epochSeconds);

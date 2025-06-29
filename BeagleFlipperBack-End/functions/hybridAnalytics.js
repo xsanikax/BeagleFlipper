@@ -1,10 +1,6 @@
 /**
- * hybridAnalytics.js - DEFINITIVE PARALLEL PROCESSING VERSION
- * This version preserves the full-length original code structure. It solves the timeout errors
- * by fetching item data in parallel batches, which is significantly faster. It prioritizes
- * a small list of "staple" items first before proceeding to a full scan.
- *
- * Updated to use centralized trading configuration.
+ * hybridAnalytics.js - FIXED VERSION WITH PROPER SKIP HANDLING AND BUY LIMIT TRACKING
+ * This version properly handles the skip functionality and ensures buy limits are respected
  */
 
 const wikiApi = require('./wikiApiHandler');
@@ -14,8 +10,10 @@ const {
     TRADING_HELPERS,
     TARGET_COMMODITIES,
     STABLE_ITEMS,
-    STAPLE_ITEMS
+    STAPLE_ITEMS,
+    F2P_ITEM_IDS
 } = require('./tradingConfig');
+
 
 // --- UTILITY FUNCTIONS ---
 
@@ -64,14 +62,14 @@ function getPricesFromSnapshots(timeseries) {
             const dropPercentage = (floorPrice - currentLow) / floorPrice;
             if (dropPercentage >= TRADING_CONFIG.VOLATILITY_THRESHOLD) {
                 opportunityBuyPrice = currentLow;
-                console.log(`[VOLATILITY] Detected ${(dropPercentage * 100).toFixed(1)}% price drop! Using opportunity buy price: ${currentLow} vs average: ${floorPrice} (${TRADING_HELPERS.getOpportunityWindowDescription()} window)`);
+                console.log(`[VOLATILITY] Detected ${(dropPercentage * 100).toFixed(1)}% price drop! Using opportunity buy price: ${currentLow} vs average: ${floorPrice}`);
             }
 
             // Check for dramatic price spike (sell opportunity)
             const spikePercentage = (currentHigh - ceilingPrice) / ceilingPrice;
             if (spikePercentage >= TRADING_CONFIG.VOLATILITY_THRESHOLD) {
                 opportunitySellPrice = currentHigh;
-                console.log(`[VOLATILITY] Detected ${(spikePercentage * 100).toFixed(1)}% price spike! Using opportunity sell price: ${currentHigh} vs average: ${ceilingPrice} (${TRADING_HELPERS.getOpportunityWindowDescription()} window)`);
+                console.log(`[VOLATILITY] Detected ${(spikePercentage * 100).toFixed(1)}% price spike! Using opportunity sell price: ${currentHigh} vs average: ${ceilingPrice}`);
             }
         }
     }
@@ -103,7 +101,14 @@ function isProfitableSell(buyPrice, sellPrice) {
 
 function calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining) {
     const maxByCash = Math.floor(cashPerSlot / buyPrice);
-    return Math.min(maxByCash, limitRemaining);
+    const finalQuantity = Math.min(maxByCash, limitRemaining);
+
+    // Debug logging to catch buy limit issues
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        console.log(`[BUY_QUANTITY] Cash: ${cashPerSlot}gp, Price: ${buyPrice}gp, Max by cash: ${maxByCash}, Limit remaining: ${limitRemaining}, Final quantity: ${finalQuantity}`);
+    }
+
+    return finalQuantity;
 }
 
 function calculateQuickFlipScore(flip) {
@@ -140,10 +145,6 @@ function sortByQuickFlipScore(a, b) {
     return calculateQuickFlipScore(b) - calculateQuickFlipScore(a);
 }
 
-function sortByPotentialProfitDesc(a, b) {
-    return b.potentialHourlyProfit - a.potentialHourlyProfit;
-}
-
 function isValidItem(item) {
     return item &&
            item.tradeable_on_ge !== false &&
@@ -152,13 +153,10 @@ function isValidItem(item) {
 }
 
 /**
- * Gets the appropriate limit for an item, preferring TARGET_COMMODITIES config over API data
+ * Gets the buy limit for an item - ALWAYS uses wiki API data, never config overrides
  */
 function getItemLimit(id, mapEntry) {
-    const targetItem = TARGET_COMMODITIES[id];
-    if (targetItem && targetItem.limit) {
-        return targetItem.limit;
-    }
+    // FORCED: Always use wiki API data for buy limits, ignore TARGET_COMMODITIES limits
     return mapEntry.limit;
 }
 
@@ -171,20 +169,33 @@ function getItemPriority(id) {
 }
 
 /**
- * NEW: Fetches and analyzes a batch of items in parallel to significantly speed up the process.
+ * Fetches and analyzes a batch of items in parallel to significantly speed up the process.
+ * @param {Array} ids - Array of item IDs to analyze
+ * @param {number} cashPerSlot - Available cash per GE slot
+ * @param {Map} recentlyBoughtMap - Map of recently bought quantities
+ * @param {Object} marketData - Market data from wiki API
+ * @param {Set} excludedIds - Set of item IDs to exclude
+ * @param {boolean} isF2pMode - Whether to filter for F2P items only
  * @returns An array of profitable flip objects.
  */
-async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData, activeOfferItemIds) {
+async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData, excludedIds, isF2pMode = false) {
     const promises = ids.map(async (id) => {
         try {
-            // --- FIX: Check if there's already an active offer for this item ---
-            if (activeOfferItemIds && activeOfferItemIds.has(id)) {
+            // Check if item is excluded
+            if (excludedIds && excludedIds.has(id)) {
                 if (TRADING_CONFIG.LOG_REJECTED_ITEMS) {
-                    console.log(`[DEBUG] Item ${id} REJECTED: Already has an active offer.`);
+                    console.log(`[DEBUG] Item ${id} REJECTED: Item is blocked/excluded.`);
                 }
                 return null;
             }
-            // --- END FIX ---
+
+            // F2P mode filter - only allow F2P items
+            if (isF2pMode && !F2P_ITEM_IDS.has(id)) {
+                if (TRADING_CONFIG.LOG_REJECTED_ITEMS) {
+                    console.log(`[DEBUG] Item ${id} REJECTED: Not F2P item.`);
+                }
+                return null;
+            }
 
             const mapEntry = marketData.mapping.find(m => m.id === id);
             if (!isValidItem(mapEntry)) return null;
@@ -198,7 +209,6 @@ async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData,
             const hourlyVolume = getHourlyVolume(ts);
             if (!hourlyVolume) return null;
 
-            // Use opportunity pricing if volatility detected, otherwise use normal pricing
             const buyPrice = priceData.opportunityBuyPrice
                 ? Math.floor(priceData.opportunityBuyPrice) + 1
                 : Math.floor(priceData.avgLow) + 1;
@@ -211,19 +221,36 @@ async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData,
             if (buyPrice < TRADING_CONFIG.MIN_ITEM_VALUE) return null;
             if (!isProfitableSell(buyPrice, sellPrice)) return null;
 
-            // Use configured limit if available, otherwise use API limit
             const itemLimit = getItemLimit(id, mapEntry);
-            const limitRemaining = itemLimit - (recentlyBoughtMap.get(id) || 0);
+            const recentlyBought = recentlyBoughtMap.get(id) || 0;
+            const limitRemaining = itemLimit - recentlyBought;
+
+            // ENHANCED BUY LIMIT LOGGING - Always show wiki limit vs any config override
+            if (TRADING_CONFIG.LOG_REJECTED_ITEMS || TRADING_CONFIG.ENABLE_DEBUG_LOGGING || id === 2) { // Cannonball ID is likely 2
+                console.log(`[BUY_LIMIT] Item ${id} (${mapEntry.name}): Wiki API limit=${mapEntry.limit}, Recently bought=${recentlyBought}, Remaining=${limitRemaining}`);
+
+                // Show if there was a config override that we're ignoring
+                const targetItem = TARGET_COMMODITIES[id];
+                if (targetItem && targetItem.limit && targetItem.limit !== mapEntry.limit) {
+                    console.log(`[BUY_LIMIT] IGNORED config override for ${id}: config=${targetItem.limit}, using wiki=${mapEntry.limit}`);
+                }
+            }
 
             if (limitRemaining <= 0) {
                 if (TRADING_CONFIG.LOG_REJECTED_ITEMS) {
-                    console.log(`[DEBUG] Item ${id} (${mapEntry.name}) REJECTED: Buy limit of ${itemLimit} reached (already bought ${recentlyBoughtMap.get(id) || 0}).`);
+                    console.log(`[DEBUG] Item ${id} (${mapEntry.name}) REJECTED: Buy limit of ${itemLimit} reached (recently bought: ${recentlyBought}).`);
                 }
                 return null;
             }
 
             const quantity = calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining);
             if (quantity <= 0) return null;
+
+            // FINAL QUANTITY VALIDATION - Double check the quantity is not exceeding limits
+            if (quantity > limitRemaining) {
+                console.error(`[ERROR] Quantity calculation error! Item ${id}: calculated quantity ${quantity} exceeds limit remaining ${limitRemaining}`);
+                return null;
+            }
 
             const profit = Math.floor(sellPrice * (1 - TRADING_CONFIG.GE_TAX_RATE)) - buyPrice;
             const potentialHourlyProfit = profit * hourlyVolume;
@@ -248,14 +275,11 @@ async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData,
     });
 
     const results = await Promise.all(promises);
-    return results.filter(Boolean); // Filter out any null results
+    return results.filter(Boolean);
 }
 
 /**
  * Fetches a manual price suggestion for a given item ID and type (buy/sell).
- * @param {number} itemId The ID of the item.
- * @param {string} type The type of suggestion ('buy' or 'sell').
- * @returns {object} A suggestion object with the price.
  */
 async function getPriceSuggestion(itemId, type) {
     if (!itemId || !['buy', 'sell'].includes(type)) {
@@ -298,12 +322,11 @@ async function getPriceSuggestion(itemId, type) {
     };
 }
 
-
 // --- MAIN SCRIPT LOGIC ---
 async function getHybridSuggestion(userState, db, displayName) {
     if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
         console.log('[DEBUG] Starting getHybridSuggestion');
-        console.log(`[DEBUG] Using pricing windows: Buy=${TRADING_HELPERS.getBuyWindowDescription()}, Sell=${TRADING_HELPERS.getSellWindowDescription()}`);
+        console.log('[DEBUG] UserState received:', JSON.stringify(userState, null, 2));
     }
 
     if (!userState || !db) {
@@ -311,7 +334,6 @@ async function getHybridSuggestion(userState, db, displayName) {
         return { type: 'wait' };
     }
 
-    // Use simple in-memory cache to prevent re-fetching the main mapping on every quick tick.
     await wikiApi.ensureMarketDataIsFresh();
     const marketData = wikiApi.getMarketData();
     if (!marketData || !marketData.mapping) {
@@ -319,19 +341,60 @@ async function getHybridSuggestion(userState, db, displayName) {
         return { type: 'wait' };
     }
 
-    const { inventory = [], offers = [] } = userState;
+    // Extract user state parameters with proper defaults
+    const {
+        blocked_items = [],
+        skip_suggestion = false,
+        last_suggested_item_id = null,
+        skipped_items = [],  // NEW: Array of persistently skipped items
+        inventory = [],
+        offers = [],
+        sell_only_mode = false,
+        preferences = {}
+    } = userState;
+
+    const isF2pMode = preferences.f2pOnlyMode || false;
+
+    console.log(`[DEBUG] Mode: ${isF2pMode ? 'F2P' : 'Hybrid'}, Sell-only: ${sell_only_mode}, Skip: ${skip_suggestion}`);
+    if (skip_suggestion && last_suggested_item_id) {
+        console.log(`[DEBUG] SKIP: User wants to skip item ${last_suggested_item_id}`);
+    }
+
+    // ENHANCED EXCLUSION LOGIC - Handle both temporary and persistent skips
     const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
+    const excludedIds = new Set([
+        ...activeOfferItemIds,
+        ...blocked_items.map(Number),
+        ...(skipped_items || []).map(Number)  // Add persistently skipped items
+    ]);
+
+    // Add the currently being skipped item (temporary skip for this session)
+    if (skip_suggestion && last_suggested_item_id) {
+        excludedIds.add(Number(last_suggested_item_id));
+        console.log(`[DEBUG] SKIP: Temporarily excluding item ${last_suggested_item_id} from results`);
+    }
+
+    console.log(`[DEBUG] Excluded ${excludedIds.size} items: ${Array.from(excludedIds).slice(0, 10).join(', ')}${excludedIds.size > 10 ? '...' : ''}`);
 
     // --- STEP 1: Collect Completed Offers ---
     const completedIndex = offers.findIndex(o => ['completed','partial'].includes(o.status) && o.collected_amount > 0);
     if (completedIndex !== -1) {
         const offer = offers[completedIndex];
+        console.log(`[DEBUG] Found completed offer at slot ${completedIndex}`);
         return { type: 'collect', slot: completedIndex, offer_slot: offer.slot, item_id: offer.item_id };
     }
 
-    // --- STEP 2: Sell Inventory ---
+    // --- STEP 2: Sell Inventory Items ---
+    const sellableItems = [];
     for (const item of inventory) {
-        if (item.id === 995 || activeOfferItemIds.has(item.id) || item.amount <= 0) continue;
+        if (item.id === 995 || excludedIds.has(item.id) || item.amount <= 0) continue;
+
+        // Skip if F2P mode and item is not F2P
+        if (isF2pMode && !F2P_ITEM_IDS.has(item.id)) {
+            console.log(`[DEBUG] Skipping inventory item ${item.id}: Not F2P item`);
+            continue;
+        }
+
         const mapEntry = marketData.mapping.find(m => m.id === item.id);
         if (!isValidItem(mapEntry)) continue;
 
@@ -341,32 +404,67 @@ async function getHybridSuggestion(userState, db, displayName) {
         const priceData = getPricesFromSnapshots(ts);
         if (!priceData) continue;
 
-        // Use opportunity pricing for sells if available, otherwise normal pricing
         const sellPrice = priceData.opportunitySellPrice
             ? Math.floor(priceData.opportunitySellPrice) - 1
             : Math.floor(priceData.avgHigh) - 1;
-        return { type: 'sell', item_id: item.id, name: mapEntry.name, price: sellPrice, quantity: item.amount };
+
+        sellableItems.push({
+            id: item.id,
+            name: mapEntry.name,
+            price: sellPrice,
+            quantity: item.amount,
+            volume: getHourlyVolume(ts) || 0
+        });
+    }
+
+    // If we have sellable items, return the one with highest volume (fastest to sell)
+    if (sellableItems.length > 0) {
+        sellableItems.sort((a, b) => b.volume - a.volume);
+        const bestSell = sellableItems[0];
+        console.log(`[DEBUG] Suggesting sell for ${bestSell.name} at ${bestSell.price}gp (volume: ${bestSell.volume})`);
+        return {
+            type: 'sell',
+            item_id: bestSell.id,
+            name: bestSell.name,
+            price: bestSell.price,
+            quantity: bestSell.quantity
+        };
+    }
+
+    // Handle sell-only mode - if no items to sell, wait for more
+    if (sell_only_mode) {
+        console.log('[DEBUG] Sell-only mode: No items to sell, waiting.');
+        return { type: 'wait', message: 'Sell-only mode: No items available to sell. Complete current trades or add items to inventory.' };
     }
 
     // --- STEP 3: Check for GE Slots and Cash ---
     const emptySlots = offers.filter(o => o.status === 'empty');
     if (!emptySlots.length) {
         console.log('[DEBUG] No empty slots available');
-        return { type: 'wait' };
+        return { type: 'wait', message: 'No empty GE slots available' };
     }
 
     const cashAmount = inventory.find(i => i.id === 995)?.amount || 0;
     if (cashAmount < TRADING_CONFIG.MIN_CASH_PER_SLOT) {
         console.log(`[DEBUG] Insufficient cash: ${cashAmount} (need at least ${TRADING_CONFIG.MIN_CASH_PER_SLOT})`);
-        return { type: 'wait' };
+        return { type: 'wait', message: `Insufficient cash: ${cashAmount.toLocaleString()}gp` };
     }
     const cashPerSlot = Math.floor(cashAmount / emptySlots.length);
 
     // --- STEP 4: Get Buy Limits & Active Slot Counts ---
+    console.log(`[DEBUG] Fetching buy limits for user: ${displayName}`);
     const recentlyBoughtMap = await getRecentlyBoughtQuantities(db, displayName);
+    console.log(`[DEBUG] Buy limit data retrieved: ${recentlyBoughtMap.size} items tracked`);
+
+    // Debug log the buy limit data
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING && recentlyBoughtMap.size > 0) {
+        console.log('[DEBUG] Current buy limits:');
+        for (const [itemId, quantity] of recentlyBoughtMap.entries()) {
+            console.log(`  Item ${itemId}: ${quantity} recently bought`);
+        }
+    }
 
     let lowVolumeActiveCount = 0;
-    // This loop is slow but necessary for accurate slot management.
     for (const offer of offers.filter(o => o.status !== 'empty' && o.buy_sell === 'buy')) {
         const ts = await wikiApi.fetchTimeseriesForItem(offer.item_id);
         const hourlyVolume = getHourlyVolume(ts);
@@ -378,35 +476,56 @@ async function getHybridSuggestion(userState, db, displayName) {
     // --- STEP 5: Check Low Volume Slot Limit ---
     if (lowVolumeActiveCount >= TRADING_CONFIG.MAX_LOW_VOLUME_ACTIVE) {
         console.log(`[DEBUG] Too many low-volume items active (${lowVolumeActiveCount}). Waiting.`);
-        return { type: 'wait' };
+        return { type: 'wait', message: 'Too many slow-trading items active' };
     }
 
     // --- STEP 6: Find a Profitable Flip ---
-    // Prioritize staple items for a quick check
-    let profitableFlips = await analyzeItemBatch(Array.from(STAPLE_ITEMS), cashPerSlot, recentlyBoughtMap, marketData, activeOfferItemIds);
+    console.log(`[DEBUG] Searching for profitable flips in ${isF2pMode ? 'F2P' : 'hybrid'} mode...`);
 
-    // If no staple items are profitable, expand the search
+    // Choose item pools based on mode
+    let stapleItems, allItems;
+
+    if (isF2pMode) {
+        // For F2P mode, use F2P items exclusively
+        const f2pItemsArray = Array.from(F2P_ITEM_IDS);
+        stapleItems = f2pItemsArray.slice(0, 50); // First 50 F2P items as "staples"
+        allItems = f2pItemsArray;
+        console.log(`[DEBUG] F2P Mode: Using ${stapleItems.length} staple F2P items, ${allItems.length} total F2P items`);
+    } else {
+        // For hybrid mode, use full item pools
+        stapleItems = Array.from(STAPLE_ITEMS);
+        allItems = Object.keys(TARGET_COMMODITIES).map(Number);
+        console.log(`[DEBUG] Hybrid Mode: Using ${stapleItems.length} staple items, ${allItems.length} total items`);
+    }
+
+    let profitableFlips = await analyzeItemBatch(stapleItems, cashPerSlot, recentlyBoughtMap, marketData, excludedIds, isF2pMode);
+
     if (profitableFlips.length === 0) {
-        console.log('[DEBUG] No staple items found, expanding search to target commodities...');
-        const allItemIds = Object.keys(TARGET_COMMODITIES).map(Number);
-        // Batch processing to avoid timeouts
-        for (let i = 0; i < allItemIds.length; i += TRADING_CONFIG.PARALLEL_BATCH_SIZE) {
-            const batchIds = allItemIds.slice(i, i + TRADING_CONFIG.PARALLEL_BATCH_SIZE);
-            const batchResults = await analyzeItemBatch(batchIds, cashPerSlot, recentlyBoughtMap, marketData, activeOfferItemIds);
+        console.log(`[DEBUG] No staple items found, expanding search to all ${isF2pMode ? 'F2P' : 'target'} items...`);
+
+        for (let i = 0; i < allItems.length; i += TRADING_CONFIG.PARALLEL_BATCH_SIZE) {
+            const batchIds = allItems.slice(i, i + TRADING_CONFIG.PARALLEL_BATCH_SIZE);
+            const batchResults = await analyzeItemBatch(batchIds, cashPerSlot, recentlyBoughtMap, marketData, excludedIds, isF2pMode);
             profitableFlips.push(...batchResults);
-            // If we find a good flip, we can stop early to be faster
             if (profitableFlips.length > 0) break;
         }
     }
 
     if (profitableFlips.length === 0) {
         console.log('[DEBUG] No profitable flips found after full scan.');
-        return { type: 'wait' };
+        const blockedCount = blocked_items.length;
+        const skippedCount = (skipped_items || []).length;
+        let message = `No profitable ${isF2pMode ? 'F2P ' : ''}items found`;
+        if (blockedCount > 0 || skippedCount > 0) {
+            message += ` (${blockedCount} blocked, ${skippedCount} skipped)`;
+        }
+        return { type: 'wait', message };
     }
 
-    // Sort by the most promising flip◙
     profitableFlips.sort(sortByQuickFlipScore);
     const bestFlip = profitableFlips[0];
+
+    console.log(`[DEBUG] Best flip found: ${bestFlip.name} - Buy: ${bestFlip.price}gp, Potential profit: ${bestFlip.potentialHourlyProfit}gp/hr`);
 
     // --- STEP 7: Return the Best Suggestion ---
     return {
@@ -415,11 +534,10 @@ async function getHybridSuggestion(userState, db, displayName) {
         name: bestFlip.name,
         price: bestFlip.price,
         quantity: bestFlip.quantity,
-        reason: `Potential hourly profit: ${bestFlip.potentialHourlyProfit.toLocaleString()}gp. Volume: ${bestFlip.hourlyVolume.toLocaleString()}/hr.`
+        reason: `${isF2pMode ? 'F2P ' : ''}Potential hourly profit: ${bestFlip.potentialHourlyProfit.toLocaleString()}gp. Volume: ${bestFlip.hourlyVolume.toLocaleString()}/hr.`
     };
 }
 
-// --- FIX: EXPORT THE FUNCTIONS ---
 module.exports = {
     getHybridSuggestion,
     getPriceSuggestion,

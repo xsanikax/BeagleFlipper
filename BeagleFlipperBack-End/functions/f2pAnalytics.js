@@ -1,8 +1,8 @@
 /**
- * f2pAnalytics.js - F2P STRATEGIC PARALLEL PROCESSING VERSION
- * This is a high-fidelity replica of the hybridAnalytics logic, fully adapted for the F2P market.
- * It performs a two-phase scan: a priority check on F2P_STAPLE_ITEMS, followed by a
- * full scan of all F2P_ITEM_IDS if necessary, ensuring a robust and serious F2P strategy.
+ * f2pAnalytics.js - F2P STRATEGIC PARALLEL PROCESSING VERSION WITH TOGGLE LOGIC
+ * This version now properly handles the F2P toggle state and can route back to hybrid mode
+ * when F2P mode is toggled off. It includes all the same user state handling as hybridAnalytics.
+ * FIXED: Now properly handles blocked items exclusion, F2P mode toggle, and skip_suggestion logic
  */
 
 const wikiApi = require('./wikiApiHandler');
@@ -10,8 +10,11 @@ const { getRecentlyBoughtQuantities } = require('./buyLimitTracker');
 const {
     TRADING_CONFIG,
     TRADING_HELPERS,
+    TARGET_COMMODITIES,
+    STABLE_ITEMS,
+    STAPLE_ITEMS,
     F2P_ITEM_IDS,
-    F2P_STAPLE_ITEMS // Use both F2P item lists
+    F2P_STAPLE_ITEMS
 } = require('./tradingConfig');
 
 // --- UTILITY FUNCTIONS (Mirrors hybridAnalytics) ---
@@ -45,10 +48,12 @@ function getPricesFromSnapshots(timeseries) {
             const dropPercentage = (floorPrice - currentLow) / floorPrice;
             if (dropPercentage >= TRADING_CONFIG.VOLATILITY_THRESHOLD) {
                 opportunityBuyPrice = currentLow;
+                console.log(`[F2P VOLATILITY] Detected ${(dropPercentage * 100).toFixed(1)}% price drop! Using opportunity buy price: ${currentLow} vs average: ${floorPrice}`);
             }
             const spikePercentage = (currentHigh - ceilingPrice) / ceilingPrice;
             if (spikePercentage >= TRADING_CONFIG.VOLATILITY_THRESHOLD) {
                 opportunitySellPrice = currentHigh;
+                console.log(`[F2P VOLATILITY] Detected ${(spikePercentage * 100).toFixed(1)}% price spike! Using opportunity sell price: ${currentHigh} vs average: ${ceilingPrice}`);
             }
         }
     }
@@ -112,16 +117,45 @@ function isValidItem(item) {
            item.limit > 0;
 }
 
+/**
+ * Gets the appropriate limit for an item, preferring TARGET_COMMODITIES config over API data
+ */
 function getItemLimit(id, mapEntry) {
+    const targetItem = TARGET_COMMODITIES[id];
+    if (targetItem && targetItem.limit) {
+        return targetItem.limit;
+    }
     return mapEntry.limit;
 }
 
-async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData, activeOfferItemIds) {
+/**
+ * Gets the priority for an item from TARGET_COMMODITIES config
+ */
+function getItemPriority(id) {
+    const targetItem = TARGET_COMMODITIES[id];
+    return targetItem ? targetItem.priority : 1;
+}
+
+// Updated to handle both F2P-only and hybrid modes based on isF2pMode flag
+async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData, excludedIds, isF2pMode = true) {
     const promises = ids.map(async (id) => {
         try {
-            if (activeOfferItemIds && activeOfferItemIds.has(id)) {
+            // Check if item is excluded
+            if (excludedIds && excludedIds.has(id)) {
+                if (TRADING_CONFIG.LOG_REJECTED_ITEMS) {
+                    console.log(`[DEBUG] ${isF2pMode ? 'F2P' : 'HYBRID'}: Item ${id} REJECTED: Item is blocked/excluded.`);
+                }
                 return null;
             }
+
+            // F2P mode filter - only allow F2P items when in F2P mode
+            if (isF2pMode && !F2P_ITEM_IDS.has(id)) {
+                if (TRADING_CONFIG.LOG_REJECTED_ITEMS) {
+                    console.log(`[DEBUG] F2P: Item ${id} REJECTED: Not F2P item.`);
+                }
+                return null;
+            }
+
             const mapEntry = marketData.mapping.find(m => m.id === id);
             if (!isValidItem(mapEntry)) return null;
 
@@ -144,13 +178,19 @@ async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData,
             const itemLimit = getItemLimit(id, mapEntry);
             const limitRemaining = itemLimit - (recentlyBoughtMap.get(id) || 0);
 
-            if (limitRemaining <= 0) return null;
+            if (limitRemaining <= 0) {
+                if (TRADING_CONFIG.LOG_REJECTED_ITEMS) {
+                    console.log(`[DEBUG] ${isF2pMode ? 'F2P' : 'HYBRID'}: Item ${id} (${mapEntry.name}) REJECTED: Buy limit of ${itemLimit} reached.`);
+                }
+                return null;
+            }
 
             const quantity = calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining);
             if (quantity <= 0) return null;
 
             const profit = Math.floor(sellPrice * (1 - TRADING_CONFIG.GE_TAX_RATE)) - buyPrice;
             const potentialHourlyProfit = profit * hourlyVolume;
+            const priority = getItemPriority(id);
 
             return {
                 id,
@@ -160,10 +200,11 @@ async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData,
                 profit,
                 hourlyVolume,
                 potentialHourlyProfit,
+                priority
             };
         } catch (error) {
             if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-                console.log(`[DEBUG] F2P: CRITICAL ERROR processing item ${id}:`, error.stack);
+                console.log(`[DEBUG] ${isF2pMode ? 'F2P' : 'HYBRID'}: CRITICAL ERROR processing item ${id}:`, error.stack);
             }
             return null;
         }
@@ -173,11 +214,11 @@ async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData,
     return results.filter(Boolean);
 }
 
-// --- MAIN F2P SCRIPT LOGIC ---
+// --- MAIN F2P SCRIPT LOGIC WITH TOGGLE SUPPORT ---
 async function getF2pSuggestion(userState, db, displayName) {
     if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-        console.log('[DEBUG] F2P: Starting getF2pSuggestion');
-        console.log(`[DEBUG] F2P: Using pricing windows: Buy=${TRADING_HELPERS.getBuyWindowDescription()}, Sell=${TRADING_HELPERS.getSellWindowDescription()}`);
+        console.log(`[DEBUG] F2P: preferences.f2pOnlyMode = ${userState.preferences.f2pOnlyMode}`);
+        console.log(`[DEBUG] F2P: sell_only_mode = ${userState.sell_only_mode}`);
     }
 
     if (!userState || !db) {
@@ -192,19 +233,60 @@ async function getF2pSuggestion(userState, db, displayName) {
         return { type: 'wait' };
     }
 
-    const { inventory = [], offers = [] } = userState;
-    const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
+    // Extract user state parameters with proper defaults
+    const {
+        blocked_items = [],
+        skip_suggestion = false,
+        inventory = [],
+        offers = [],
+        sell_only_mode = false,
+        preferences = {}
+    } = userState;
+
+    // CHECK F2P MODE TOGGLE - This is the key addition!
+    const isF2pMode = preferences.f2pOnlyMode || false;
+
+    console.log(`[DEBUG] F2P Analytics - Mode: ${isF2pMode ? 'F2P' : 'Hybrid'}, Sell-only: ${sell_only_mode}, Skip: ${skip_suggestion}`);
+
+    // If F2P mode is toggled OFF, we should route back to hybrid mode
+    // This requires importing and calling hybridAnalytics instead
+    if (!isF2pMode) {
+        console.log('[DEBUG] F2P: F2P mode toggled OFF, routing to hybrid analytics');
+        // Import hybridAnalytics here to avoid circular dependency
+        const { getHybridSuggestion } = require('./hybridAnalytics');
+        return await getHybridSuggestion(userState, db, displayName);
+    }
+        // ======================== STATE HANDLING FIX ========================
+        // The logic is now stateless and relies entirely on the `userState` from `index.js`.
+        // The `blocked_items` array passed in `userState` now correctly contains both
+        // permanent blocks and the temporary item_to_skip for this single request.
+
+        const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
+        const excludedIds = new Set([...activeOfferItemIds, ...blocked_items.map(Number)]);
+
+        console.log(`[DEBUG] F2P: Excluded ${excludedIds.size} items: ${Array.from(excludedIds).join(', ')}`);
+        // ====================== END OF STATE HANDLING FIX =======================
+
 
     // --- STEP 1: Collect Completed Offers ---
     const completedIndex = offers.findIndex(o => ['completed','partial'].includes(o.status) && o.collected_amount > 0);
     if (completedIndex !== -1) {
         const offer = offers[completedIndex];
+        console.log(`[DEBUG] F2P: Found completed offer at slot ${completedIndex}`);
         return { type: 'collect', slot: completedIndex, offer_slot: offer.slot, item_id: offer.item_id };
     }
 
-    // --- STEP 2: Sell Inventory ---
+    // --- STEP 2: Sell Inventory Items (F2P Only) ---
+    const sellableItems = [];
     for (const item of inventory) {
-        if (item.id === 995 || activeOfferItemIds.has(item.id) || item.amount <= 0) continue;
+        if (item.id === 995 || excludedIds.has(item.id) || item.amount <= 0) continue;
+
+        // Skip if item is not F2P
+        if (!F2P_ITEM_IDS.has(item.id)) {
+            console.log(`[DEBUG] F2P: Skipping inventory item ${item.id}: Not F2P item`);
+            continue;
+        }
+
         const mapEntry = marketData.mapping.find(m => m.id === item.id);
         if (!isValidItem(mapEntry)) continue;
 
@@ -214,21 +296,50 @@ async function getF2pSuggestion(userState, db, displayName) {
         const priceData = getPricesFromSnapshots(ts);
         if (!priceData) continue;
 
-        const sellPrice = priceData.opportunitySellPrice ? Math.floor(priceData.opportunitySellPrice) - 1 : Math.floor(priceData.avgHigh) - 1;
-        return { type: 'sell', item_id: item.id, name: mapEntry.name, price: sellPrice, quantity: item.amount };
+        const sellPrice = priceData.opportunitySellPrice
+            ? Math.floor(priceData.opportunitySellPrice) - 1
+            : Math.floor(priceData.avgHigh) - 1;
+
+        sellableItems.push({
+            id: item.id,
+            name: mapEntry.name,
+            price: sellPrice,
+            quantity: item.amount,
+            volume: getHourlyVolume(ts) || 0
+        });
+    }
+
+    // If we have sellable items, return the one with highest volume (fastest to sell)
+    if (sellableItems.length > 0) {
+        sellableItems.sort((a, b) => b.volume - a.volume);
+        const bestSell = sellableItems[0];
+        console.log(`[DEBUG] F2P: Suggesting sell for ${bestSell.name} at ${bestSell.price}gp (volume: ${bestSell.volume})`);
+        return {
+            type: 'sell',
+            item_id: bestSell.id,
+            name: bestSell.name,
+            price: bestSell.price,
+            quantity: bestSell.quantity
+        };
+    }
+
+    // Handle sell-only mode
+    if (sell_only_mode) {
+        console.log('[DEBUG] F2P: Sell-only mode: No F2P items to sell, waiting.');
+        return { type: 'wait', message: 'Sell-only mode: No F2P items available to sell. Complete current trades or add items to inventory.' };
     }
 
     // --- STEP 3: Check for GE Slots and Cash ---
     const emptySlots = offers.filter(o => o.status === 'empty');
     if (!emptySlots.length) {
         console.log('[DEBUG] F2P: No empty slots available');
-        return { type: 'wait' };
+        return { type: 'wait', message: 'No empty GE slots available' };
     }
 
     const cashAmount = inventory.find(i => i.id === 995)?.amount || 0;
     if (cashAmount < TRADING_CONFIG.MIN_CASH_PER_SLOT) {
         console.log(`[DEBUG] F2P: Insufficient cash: ${cashAmount} (need at least ${TRADING_CONFIG.MIN_CASH_PER_SLOT})`);
-        return { type: 'wait' };
+        return { type: 'wait', message: `Insufficient cash: ${cashAmount.toLocaleString()}gp` };
     }
     const cashPerSlot = Math.floor(cashAmount / emptySlots.length);
 
@@ -247,44 +358,45 @@ async function getF2pSuggestion(userState, db, displayName) {
     // --- STEP 5: Check Low Volume Slot Limit ---
     if (lowVolumeActiveCount >= TRADING_CONFIG.MAX_LOW_VOLUME_ACTIVE) {
         console.log(`[DEBUG] F2P: Too many low-volume items active (${lowVolumeActiveCount}). Waiting.`);
-        return { type: 'wait' };
+        return { type: 'wait', message: 'Too many slow-trading F2P items active' };
     }
 
     // --- STEP 6: Find a Profitable F2P Flip (Two-Phase Scan) ---
-    // Prioritize staple F2P items for a quick check
-    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-        console.log('[DEBUG] F2P: Starting staple item scan...');
-    }
-    let profitableFlips = await analyzeItemBatch(Array.from(F2P_STAPLE_ITEMS), cashPerSlot, recentlyBoughtMap, marketData, activeOfferItemIds);
+    console.log('[DEBUG] F2P: Searching for profitable F2P flips...');
 
-    // If no staple items are profitable, expand the search to all F2P items
+    // Start with F2P staple items
+    let profitableFlips = await analyzeItemBatch(Array.from(F2P_STAPLE_ITEMS), cashPerSlot, recentlyBoughtMap, marketData, excludedIds, true);
+
     if (profitableFlips.length === 0) {
-        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.log('[DEBUG] F2P: No staple items found, expanding search to all F2P items...');
-        }
+        console.log('[DEBUG] F2P: No staple items found, expanding search to all F2P items...');
+
         const allF2pItemIds = Array.from(F2P_ITEM_IDS);
-        // Batch processing to avoid timeouts
         for (let i = 0; i < allF2pItemIds.length; i += TRADING_CONFIG.PARALLEL_BATCH_SIZE) {
             const batchIds = allF2pItemIds.slice(i, i + TRADING_CONFIG.PARALLEL_BATCH_SIZE);
-            const batchResults = await analyzeItemBatch(batchIds, cashPerSlot, recentlyBoughtMap, marketData, activeOfferItemIds);
+            const batchResults = await analyzeItemBatch(batchIds, cashPerSlot, recentlyBoughtMap, marketData, excludedIds, true);
             profitableFlips.push(...batchResults);
-            // If we find a good flip, we can stop early to be faster
             if (profitableFlips.length > 0) break;
         }
     }
 
-    if (profitableFlips.length === 0) {
-        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        if (profitableFlips.length === 0) {
             console.log('[DEBUG] F2P: No profitable flips found after full scan.');
+            // Use the correct `blocked_items` variable from userState for the count.
+            const blockedCount = blocked_items.length;
+            let message = 'No profitable F2P items found';
+            if (blockedCount > 0) {
+                message += ` (${blockedCount} excluded)`;
+            }
+            return { type: 'wait', message };
         }
-        return { type: 'wait' };
-    }
 
-    // Sort by the most promising flip
+
     profitableFlips.sort(sortByQuickFlipScore);
     const bestFlip = profitableFlips[0];
 
-    // --- STEP 7: Return the Best Suggestion ---
+    console.log(`[DEBUG] F2P: Best flip found: ${bestFlip.name} - Buy: ${bestFlip.price}gp, Potential profit: ${bestFlip.potentialHourlyProfit}gp/hr`);
+
+    // --- STEP 7: Return the Best F2P Suggestion ---
     return {
         type: 'buy',
         item_id: bestFlip.id,

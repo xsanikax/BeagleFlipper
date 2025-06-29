@@ -1,20 +1,13 @@
 package com.beagleflipper.model;
 
-import com.beagleflipper.util.GeTax;
 import com.google.gson.annotations.SerializedName;
 import lombok.Data;
-// FIX: REMOVE THIS IMPORT for UUID if not needed elsewhere, as 'id' is now String
-// import java.util.UUID;
 
 @Data
 public class FlipV2 {
 
-    // FIX: Remove these static UUIDs as 'id' is now String
-    // public static UUID MAX_UUID = new UUID(-1L, -1L);
-    // public static UUID MIN_UUID = new UUID(0L, 0L);
-
     @SerializedName("id")
-    private String id; // FIX: Changed type from UUID to String
+    private String id;
 
     @SerializedName("account_id")
     private int accountId;
@@ -54,30 +47,20 @@ public class FlipV2 {
 
     private String accountDisplayName;
 
+    // This method is required by FlipManager for the GP drop overlay estimation
     public long calculateProfit(Transaction transaction) {
-        long amountToClose = Math.min(openedQuantity - closedQuantity, transaction.getQuantity());
-        if(amountToClose <= 0 ){
+        if (openedQuantity == 0 || transaction.getType() != OfferStatus.SELL) {
             return 0;
         }
-        long gpOut = (spent * amountToClose) / openedQuantity;
-        int sellPrice  = transaction.getAmountSpent() / transaction.getQuantity();
-        int sellPricePostTax = GeTax.getPostTaxPrice(transaction.getItemId(), sellPrice);
-        long gpIn = amountToClose * sellPricePostTax;
-        return gpIn - gpOut;
-    }
+        long avgBuyPrice = spent / openedQuantity;
+        long costOfGoodsSold = avgBuyPrice * transaction.getQuantity();
 
-    public long getAvgBuyPrice() {
-        if (spent == 0) {
-            return 0;
-        }
-        return spent / openedQuantity ;
-    }
+        int sellPrice = transaction.getPrice();
+        long revenue = (long) sellPrice * transaction.getQuantity();
+        // Uses the 2% tax rate from your config for the estimation
+        long tax = (long) Math.floor(revenue * 0.02);
+        long revenueAfterTax = revenue - tax;
 
-    public long getAvgSellPrice() {
-        if (receivedPostTax == 0) {
-            return 0;
-        }
-        return (receivedPostTax  + taxPaid) / closedQuantity;
+        return revenueAfterTax - costOfGoodsSold;
     }
-    // If you have custom equals/hashCode, ensure they handle 'id' as String.
 }

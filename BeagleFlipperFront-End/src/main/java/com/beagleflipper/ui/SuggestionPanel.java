@@ -246,7 +246,7 @@ public class SuggestionPanel extends JPanel {
                 setItemIcon(suggestion.getItemId());
                 setButtonsVisible(true);
                 break;
-            case "modify": // FIX: Added case for the new "modify" suggestion type.
+            case "modify":
                 suggestionString += "Modify offer for<br><FONT COLOR=white>" + suggestion.getName() + "</FONT>";
                 setItemIcon(suggestion.getItemId());
                 setButtonsVisible(true);
@@ -327,7 +327,17 @@ public class SuggestionPanel extends JPanel {
         } else {
             suggestionText.setCursor(new Cursor(Cursor.DEFAULT_CURSOR));
         }
-        suggestionText.setText("<html><center>" + displayMessage + "<br>" + serverMessage + "</center></html>");
+
+        // --- FIX START ---
+        // Conditionally build the HTML to avoid appending a null serverMessage.
+        String finalHtml = "<html><center>" + displayMessage;
+        if (serverMessage != null && !serverMessage.isEmpty()) {
+            finalHtml += "<br>" + serverMessage;
+        }
+        finalHtml += "</center></html>";
+        suggestionText.setText(finalHtml);
+        // --- FIX END ---
+
         suggestionText.setMaximumSize(new Dimension(suggestionText.getPreferredSize().width, Integer.MAX_VALUE));
         suggestionTextContainer.revalidate();
         suggestionTextContainer.repaint();

@@ -15,14 +15,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/**
- * This class is essentially a cache of user flips that facilitates efficient access to the flips and statistics for
- * any time range and rs account(s) combination. Since after several years a (very) active user could have hundreds of
- * thousands of flips, it would be too slow to filter and re-calculate flips/statistics from scratch every time.
- * A bucketed aggregation strategy is used where we keep pre-computed weekly buckets of statistics and flips. For any
- * time range we can efficiently combine the weekly buckets and only have to re-calculate statistics for the partial
- * weeks on the boundaries of the time range. Have tested the UI experience with >100k flips.
- */
 @Slf4j
 @Singleton
 @RequiredArgsConstructor(onConstructor_ = @Inject)
@@ -30,7 +22,6 @@ public class FlipManager {
 
     private static final int WEEK_SECS = 7 * 24 * 60 * 60;
 
-    // dependencies
     private final ApiRequestHandler api;
     private final ScheduledExecutorService executorService;
     private final OkHttpClient okHttpClient;
@@ -39,14 +30,12 @@ public class FlipManager {
     @Setter
     private Runnable flipsChangedCallback = () -> {};
 
-    // state
     private String intervalDisplayName;
     private int intervalStartTime;
     private Stats intervalStats = new Stats();
 
     final Map<String, Integer> displayNameToAccountId = new HashMap<>();
     final Map<Integer, Map<Integer, FlipV2>> lastOpenFLipByItemId = new HashMap<>();
-    // FIX: Ensure key type is String
     final Map<String, Integer> existingCloseTimes = new HashMap<>();
     final List<WeekAggregate> weeks = new ArrayList<>(365*5);
 
@@ -63,14 +52,21 @@ public class FlipManager {
 
     public synchronized long estimateTransactionProfit(String displayName, Transaction t) {
         Integer accountId = displayNameToAccountId.get(displayName);
-        if (accountId != null && lastOpenFLipByItemId.containsKey(accountId)) {
-            FlipV2 flip = lastOpenFLipByItemId.get(accountId).get(t.getItemId());
-            if(flip != null) {
-                return flip.calculateProfit(t);
-            }
+        if (accountId == null) {
+            return 0;
+        }
+        Map<Integer, FlipV2> openFlips = lastOpenFLipByItemId.get(accountId);
+        if (openFlips == null) {
+            return 0;
+        }
+        FlipV2 flip = openFlips.get(t.getItemId());
+        if (flip != null) {
+            // This now correctly calls the restored method in FlipV2
+            return flip.calculateProfit(t);
         }
         return 0;
     }
+
 
     public synchronized void mergeFlips(List<FlipV2> flips, String displayName) {
         if(!flips.isEmpty() && displayName != null) {
@@ -163,7 +159,6 @@ public class FlipManager {
             List<FlipV2> weekFlips = accountId == null ? w.flipsAfter(intervalStartTime, true) : w.flipsAfterForAccount(intervalStartTime, accountId);
             int n = weekFlips.size();
             if (n > toSkip) {
-                // note: weekFlips are ascending order but we return pages of descending order
                 int end = n - toSkip;
                 int start = Math.max(0, end - (pageSize - resultFlips.size()));
                 for(int ii=end-1; ii >= start; ii--) {
@@ -213,7 +208,6 @@ public class FlipManager {
                 }
                 flipsChangedCallback.run();
             }
-            // Catch a broader exception here to log more details.
             catch (Exception e) {
                 if (this.resetSeq == seq) {
                     log.warn("failed to load historical flips from server {}. Retrying in 10s. Stack: {}", e.getMessage(), e);
@@ -230,30 +224,27 @@ public class FlipManager {
         intervalStats = new Stats();
         displayNameToAccountId.clear();
         lastOpenFLipByItemId.clear();
-        existingCloseTimes.clear(); // Clear existingCloseTimes, keys are String
+        existingCloseTimes.clear();
         weeks.clear();
         flipsLoaded = false;
         resetSeq += 1;
     }
 
     private void mergeFlip_(FlipV2 flip) {
-        // existingCloseTimes is Map<String, Integer>, flip.getId() is String
-        // FIX: Ensure flip.getId() is treated as String
         Integer existingCloseTime = existingCloseTimes.get(flip.getId());
 
         Integer intervalAccountId = intervalDisplayName == null ? null : displayNameToAccountId.getOrDefault(intervalDisplayName, -1);
 
         if(existingCloseTime != null) {
             WeekAggregate wa = getOrInitWeek(existingCloseTime);
-            // removeFlip now takes String ID
             FlipV2 removed = wa.removeFlip(flip.getId(), existingCloseTime, flip.getAccountId());
-            if(removed.getClosedTime() >= intervalStartTime && (intervalAccountId == null || removed.getAccountId() == intervalAccountId)) {
+            if(removed.getClosedTime() >= intervalStartTime && (intervalAccountId == null || Objects.equals(removed.getAccountId(), intervalAccountId))) {
                 intervalStats.subtractFlip(removed);
             }
         }
         WeekAggregate wa = getOrInitWeek(flip.getClosedTime());
         wa.addFlip(flip);
-        if(flip.getClosedTime() >= intervalStartTime && (intervalAccountId == null || flip.getAccountId() == intervalAccountId)) {
+        if(flip.getClosedTime() >= intervalStartTime && (intervalAccountId == null || Objects.equals(flip.getAccountId(), intervalAccountId))) {
             intervalStats.addFlip(flip);
         }
         if(flip.getClosedQuantity() < flip.getOpenedQuantity()) {
@@ -261,7 +252,6 @@ public class FlipManager {
         } else if (flip.isClosed()) {
             lastOpenFLipByItemId.computeIfAbsent(flip.getAccountId(), (k) -> new HashMap<>()).remove(flip.getItemId());
         }
-        // FIX: Ensure flip.getId() is treated as String
         existingCloseTimes.put(flip.getId(), flip.getClosedTime());
     }
 
@@ -283,7 +273,7 @@ public class FlipManager {
 
     class WeekAggregate {
 
-        int pos; // note: only correct when returned by getOrInitWeek
+        int pos;
         int weekStart;
         int weekEnd;
 
@@ -296,14 +286,12 @@ public class FlipManager {
             allStats.addFlip(flip);
             accountIdToStats.computeIfAbsent(accountId, (k) -> new Stats()).addFlip(flip);
             List<FlipV2> flips = accountIdToFlips.computeIfAbsent(accountId, (k) -> new ArrayList<>());
-            // Use String ID for comparison
             int i = bisect(flips.size(), closedTimeCmp(flips, flip.getId(), flip.getClosedTime()));
             flips.add(-i -1, flip);
         }
 
-        FlipV2 removeFlip(String id, int closeTime, int accountId) { // FIX: Change id to String
+        FlipV2 removeFlip(String id, int closeTime, int accountId) {
             List<FlipV2> flips = accountIdToFlips.computeIfAbsent(accountId, (k) -> new ArrayList<>());
-            // Use String ID for comparison
             int i = bisect(flips.size(), closedTimeCmp(flips, id, closeTime));
             FlipV2 flip = flips.get(i);
             allStats.subtractFlip(flip);
@@ -320,9 +308,6 @@ public class FlipManager {
             if (time <= weekStart) {
                 return flips;
             }
-            // FIX: Pass a dummy string for ID comparison in bisect if no specific ID is relevant for the range
-            // This string should be chosen such that it reliably sorts beyond any real ID for this purpose.
-            // Using a high Unicode character is a common trick for string "max"
             int cut = -bisect(flips.size(), closedTimeCmp(flips, "\uFFFF", time)) - 1;
             return flips.subList(cut, flips.size());
         }
@@ -345,12 +330,9 @@ public class FlipManager {
         }
     }
 
-    // FIX: Change id to String in closedTimeCmp signature
     private Function<Integer, Integer> closedTimeCmp(List<FlipV2> flips, String id, int time) {
         return (a) -> {
             int c = Integer.compare(flips.get(a).getClosedTime(), time);
-            // If times are equal, use String comparison for IDs as a tie-breaker.
-            // Objects.compare handles nulls gracefully and uses natural ordering for Strings.
             return c != 0 ? c : Objects.compare(id, flips.get(a).getId(), Comparator.naturalOrder());
         };
     }
@@ -366,8 +348,8 @@ public class FlipManager {
             else if (cmp > 0)
                 high = mid - 1;
             else
-                return mid; // key found
+                return mid;
         }
-        return -(low + 1);  // key not found (low = insertion point)
+        return -(low + 1);
     }
 }

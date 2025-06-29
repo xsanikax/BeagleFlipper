@@ -6,54 +6,55 @@ const TRADING_CONFIG = {
     FIREBASE_WEB_API_KEY: "AIzaSyDspCsPLP5hpVnRCE-qYSdUbM8w-eMCJcY",
 
     // Tax and profit settings
-    GE_TAX_RATE: 0.02,                    // 2% GE tax rate
-    MIN_PROFIT_PER_ITEM: 1,                 // Minimum profit per item in GP
-    MIN_MARGIN_PERCENTAGE: 0.01,         // 1% minimum margin
+    GE_TAX_RATE: 0.02,
+    MIN_PROFIT_PER_ITEM: 1,
+    MIN_MARGIN_PERCENTAGE: 0.01,
 
-    // Volume and liquidity requirements
-    MIN_VOLUME_THRESHOLD: 2500,          // Minimum 5-minute volume
-    TIER1_MIN_VOLUME: 2500,              // Tier 1 volume requirement
-    HIGH_VOLUME_THRESHOLD: 500000,       // High volume threshold for priority trading
-    LOW_VOLUME_THRESHOLD: 1000,          // Low volume threshold
+    // --- VOLUME & LIQUIDITY FIX ---
+    // Lowered the threshold to classify more items as high-volume
+    HIGH_VOLUME_THRESHOLD: 20000, // Previous: 500000
+    // --- END OF FIX ---
+    MIN_VOLUME_THRESHOLD: 2500,
+    TIER1_MIN_VOLUME: 2500,
+    LOW_VOLUME_THRESHOLD: 1000,
 
     // Price and quantity limits
-    MAX_PRICE_PER_ITEM: 13000000,           // Maximum price per item
-    MIN_CASH_PER_SLOT: 10000,            // Minimum cash required per slot
-    MIN_ITEM_VALUE: 100,                 // Minimum item value to consider
+    MAX_PRICE_PER_ITEM: 13000000,
+    MIN_CASH_PER_SLOT: 10000,
+    MIN_ITEM_VALUE: 100,
 
     // Risk management
-    MAX_BUY_LIMIT_USAGE: 0.9,            // Use 90% of buy limit max
-    MAX_VOLUME_PERCENTAGE: 0.15,         // Buy max 15% of recent volume
-    MAX_LOW_VOLUME_ACTIVE: 2,            // Maximum low volume active trades
+    MAX_BUY_LIMIT_USAGE: 0.9,
+    MAX_VOLUME_PERCENTAGE: 0.15,
+    MAX_LOW_VOLUME_ACTIVE: 2,
 
     // AI/ML settings
-    MIN_AI_CONFIDENCE_THRESHOLD: 0.60,   // 60% minimum AI confidence
+    MIN_AI_CONFIDENCE_THRESHOLD: 0.60,
 
     // Time settings
-    BUY_LIMIT_RESET_HOURS: 4,            // Buy limit resets every 4 hours
-
-    // --- Pricing window settings (in snapshots, each snapshot = 5 minutes) ---
-    // NOTE: Use TRADING_HELPERS.getBuyWindowDescription() etc. to see the calculated time in your logs.
-    BUY_SNAPSHOT_WINDOW: 3,              // The number of 5-minute snapshots for buy price analysis
-    SELL_SNAPSHOT_WINDOW: 5,             // The number of 5-minute snapshots for sell price analysis
+    BUY_LIMIT_RESET_HOURS: 4,
+    BUY_SNAPSHOT_WINDOW: 4,
+    SELL_SNAPSHOT_WINDOW: 7,
 
     // Volatility detection settings
-    VOLATILITY_THRESHOLD: 0.25,          // 25% price change to trigger opportunity pricing
-    OPPORTUNITY_WINDOW: 3,               // The number of 5-minute snapshots for current market conditions
+    VOLATILITY_THRESHOLD: 0.25,
+    OPPORTUNITY_WINDOW: 3,
 
-    // Scoring weights
+    // --- VOLUME & LIQUIDITY FIX ---
+    // Increased the scoring bonus for high-volume items
+    HIGH_VOLUME_SCORE_MULTIPLIER: 2.0,   // Previous: 1.5
+    VERY_HIGH_VOLUME_SCORE_MULTIPLIER: 1.5, // Previous: 1.3
+    // --- END OF FIX ---
     PRIORITY_ITEM_MULTIPLIER: 2.0,
     VOLUME_SCORE_WEIGHT: 1.5,
     MARGIN_SCORE_WEIGHT: 2.0,
     STABILITY_BONUS_WEIGHT: 1.0,
-    HIGH_VOLUME_SCORE_MULTIPLIER: 1.5,   // 50% bonus for high volume
-    VERY_HIGH_VOLUME_SCORE_MULTIPLIER: 1.3, // Additional 30% bonus for very high volume
-    HIGH_MARGIN_SCORE_MULTIPLIER: 1.2,   // 20% bonus for 10%+ margin
-    MID_MARGIN_SCORE_MULTIPLIER: 1.1,    // 10% bonus for 5-10% margin
-    EXPENSIVE_ITEM_PENALTY: 0.9,         // 10% penalty for items over MAX_PRICE_PER_ITEM
+    HIGH_MARGIN_SCORE_MULTIPLIER: 1.2,
+    MID_MARGIN_SCORE_MULTIPLIER: 1.1,
+    EXPENSIVE_ITEM_PENALTY: 0.9,
 
     // Batch processing settings
-    PARALLEL_BATCH_SIZE: 25,             // Number of items to process in parallel
+    PARALLEL_BATCH_SIZE: 25,
 
     // Debug settings
     ENABLE_DEBUG_LOGGING: false,
@@ -62,34 +63,24 @@ const TRADING_CONFIG = {
 
 // Helper functions to calculate time windows dynamically
 const TRADING_HELPERS = {
-    // Get buy window time in minutes
     getBuyWindowMinutes: () => TRADING_CONFIG.BUY_SNAPSHOT_WINDOW * 5,
-
-    // Get sell window time in minutes
     getSellWindowMinutes: () => TRADING_CONFIG.SELL_SNAPSHOT_WINDOW * 5,
-
-    // Get opportunity window time in minutes
     getOpportunityWindowMinutes: () => TRADING_CONFIG.OPPORTUNITY_WINDOW * 5,
-
-    // Get buy window description
     getBuyWindowDescription: () => {
         const minutes = TRADING_HELPERS.getBuyWindowMinutes();
         return minutes >= 60 ? `${minutes / 60} hour${minutes >= 120 ? 's' : ''}` : `${minutes} minutes`;
     },
-
-    // Get sell window description
     getSellWindowDescription: () => {
         const minutes = TRADING_HELPERS.getSellWindowMinutes();
         return minutes >= 60 ? `${minutes / 60} hour${minutes >= 120 ? 's' : ''}` : `${minutes} minutes`;
     },
-
-    // Get opportunity window description
     getOpportunityWindowDescription: () => {
         const minutes = TRADING_HELPERS.getOpportunityWindowMinutes();
         return minutes >= 60 ? `${minutes / 60} hour${minutes >= 120 ? 's' : ''}` : `${minutes} minutes`;
     }
 };
 
+// ... The rest of your file (F2P_ITEM_IDS, TARGET_COMMODITIES, etc.) remains unchanged ...
 // ═══════════════════════════════════════════════════════════════════════════════════
 // 🎯 F2P ITEM COLLECTION - Curated Free-to-Play Trading Arsenal
 // ═══════════════════════════════════════════════════════════════════════════════════
@@ -245,5 +236,5 @@ module.exports = {
     STABLE_ITEMS,
     F2P_ITEM_IDS,
     STAPLE_ITEMS,
-    F2P_STAPLE_ITEMS, // Export the new F2P staples list
+    F2P_STAPLE_ITEMS,
 };

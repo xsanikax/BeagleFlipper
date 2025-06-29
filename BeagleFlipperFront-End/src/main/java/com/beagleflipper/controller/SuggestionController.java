@@ -17,6 +17,7 @@ import net.runelite.client.chat.ChatMessageBuilder;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import javax.swing.JOptionPane;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
@@ -45,12 +46,15 @@ public class SuggestionController {
     private final AccountStatusManager accountStatusManager;
     private final GrandExchangeUncollectedManager uncollectedManager;
     private final PriceGraphController graphPriceGraphController;
+    private final SuggestionPreferencesManager preferencesManager;
 
     private MainPanel mainPanel;
-    // Change type from LoginPanel to LoginPanelV2
-    private LoginPanelV2 loginPanel; //
+    private LoginPanelV2 loginPanel;
     private CopilotPanel copilotPanel;
     private SuggestionPanel suggestionPanel;
+
+    // This timestamp will track when the user last clicked the skip or block button.
+    private long lastManualActionTime = 0;
 
     public void togglePause() {
         if (pausedManager.isPaused()) {
@@ -65,23 +69,74 @@ public class SuggestionController {
     }
 
     void onGameTick() {
-        if(suggestionManager.isSuggestionRequestInProgress() || suggestionManager.isGraphDataReadingInProgress()) {
+        if (suggestionManager.isSuggestionRequestInProgress() || suggestionManager.isGraphDataReadingInProgress()) {
             return;
         }
-        // There is a race condition when the collect button is hit at the same time as offers fill.
-        // In such a case we can end up with the uncollectedManager falsely thinking there is items to collect.
-        // We identify if this has happened here by checking if the collect button is actually visible.
-        if(isUncollectedOutOfSync()) {
+        if (isUncollectedOutOfSync()) {
             log.warn("uncollected is out of sync, it thinks there are items to collect but the GE is open and the Collect button not visible");
             uncollectedManager.clearAllUncollected(osrsLoginManager.getAccountHash());
             suggestionManager.setSuggestionNeeded(true);
         }
-        // on initial login the state of the GE offers isn't correct we need to wait a couple ticks before requesting a suggestion
         if (osrsLoginManager.hasJustLoggedIn()) {
             return;
         }
-        if ((suggestionManager.isSuggestionNeeded() || suggestionManager.suggestionOutOfDate()) && !(grandExchange.isSlotOpen() && !accountStatusManager.isSuggestionSkipped())) {
+
+        // Check if the suggestion is out of date
+        boolean isSuggestionOutOfDate = suggestionManager.suggestionOutOfDate();
+
+        // If a skip/block happened less than 10 seconds ago, ignore the out-of-date check.
+        // This gives the user time to see and act on the new suggestion without an automatic
+        // refresh immediately overwriting it. This is the fix for the race condition.
+        if (System.currentTimeMillis() - lastManualActionTime < 10000) { // 10-second grace period
+            isSuggestionOutOfDate = false;
+        }
+
+        if ((suggestionManager.isSuggestionNeeded() || isSuggestionOutOfDate) && !(grandExchange.isSlotOpen() && !accountStatusManager.isSuggestionSkipped())) {
             getSuggestionAsync();
+        }
+    }
+
+    public void skipSuggestion() {
+        Suggestion s = suggestionManager.getSuggestion();
+        if (s != null) {
+            log.debug("User skipping suggestion for item: {}", s.getName());
+            // Record the time of the manual action to start the grace period.
+            this.lastManualActionTime = System.currentTimeMillis();
+            accountStatusManager.setSkipSuggestion(s.getId());
+            suggestionManager.setSuggestionNeeded(true);
+            suggestionPanel.showLoading();
+            getSuggestionAsync(); // Immediately fetch a new suggestion
+        } else {
+            log.debug("User tried to skip but there was no active suggestion.");
+        }
+    }
+
+    public void blockCurrentSuggestion() {
+        Suggestion s = suggestionManager.getSuggestion();
+        if (s == null) {
+            log.debug("No current suggestion to block.");
+            return;
+        }
+
+        String itemName = s.getName() != null ? s.getName() : "this item";
+
+        int choice = JOptionPane.showConfirmDialog(
+                suggestionPanel,
+                "Do you want to block " + itemName + "?",
+                "Confirm Block",
+                JOptionPane.YES_NO_OPTION
+        );
+
+        if (choice == JOptionPane.YES_OPTION) {
+            log.debug("User confirmed blocking item with ID {} ({})", s.getItemId(), itemName);
+            // Record the time of the manual action to start the grace period.
+            this.lastManualActionTime = System.currentTimeMillis();
+            preferencesManager.blockItem(s.getItemId());
+            suggestionManager.setSuggestionNeeded(true);
+            suggestionPanel.showLoading();
+            getSuggestionAsync(); // Immediately fetch a new suggestion
+        } else {
+            log.debug("User canceled blocking for {}", itemName);
         }
     }
 
@@ -89,13 +144,13 @@ public class SuggestionController {
         if (client.getTickCount() <= uncollectedManager.getLastUncollectedAddedTick() + 2) {
             return false;
         }
-        if(!grandExchange.isHomeScreenOpen() || grandExchange.isCollectButtonVisible()) {
+        if (!grandExchange.isHomeScreenOpen() || grandExchange.isCollectButtonVisible()) {
             return false;
         }
-        if(uncollectedManager.HasUncollected(osrsLoginManager.getAccountHash())) {
+        if (uncollectedManager.HasUncollected(osrsLoginManager.getAccountHash())) {
             return true;
         }
-        if(suggestionPanel.isCollectItemsSuggested()) {
+        if (suggestionPanel.isCollectItemsSuggested()) {
             return true;
         }
         return false;
@@ -118,7 +173,6 @@ public class SuggestionController {
         Suggestion oldSuggestion = suggestionManager.getSuggestion();
 
         Consumer<Suggestion> suggestionConsumer = (newSuggestion) -> {
-            // FIX: Add this detailed log message
             log.info(">>>>>> SUGGESTION RECEIVED: Type='{}', Item='{}', Price={}, Quantity={}, Message='{}'",
                     newSuggestion.getType(),
                     newSuggestion.getName(),
@@ -130,7 +184,6 @@ public class SuggestionController {
             suggestionManager.setSuggestionError(null);
             suggestionManager.setSuggestionRequestInProgress(false);
             log.debug("Received suggestion: {}", newSuggestion.toString());
-            accountStatusManager.resetSkipSuggestion();
             offerManager.setOfferJustPlaced(false);
             suggestionPanel.refresh();
             showNotifications(oldSuggestion, newSuggestion, accountStatus);
@@ -154,7 +207,16 @@ public class SuggestionController {
         };
         suggestionPanel.refresh();
         log.debug("tick {} getting suggestion", client.getTickCount());
+
+        // Send the request to the server
         apiRequestHandler.getSuggestionAsync(accountStatus.toJson(gson, grandExchange.isOpen(), config.priceGraphWebsite() == BeagleFlipperConfig.PriceGraphWebsite.BEAGLE_FLIPPER), suggestionConsumer, graphDataConsumer, onFailure);
+
+        // The "skip" flag has now been sent to the server. We can safely reset it
+        // on the client-side so that the *next* automatic refresh doesn't also
+        // try to skip the item.
+        if (accountStatus.isSuggestionSkipped()) {
+            accountStatusManager.resetSkipSuggestion();
+        }
     }
 
 
