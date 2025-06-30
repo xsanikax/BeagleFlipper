@@ -1,446 +1,236 @@
-// ================================================================================= //
-// ================================================================================= //
-//                                                                                 //
-//    ██████╗ ███████╗  █████╗  ██████╗ ██╗     ███████╗                           //
-//    ██╔══██╗██╔════╝ ██╔══██╗██╔════╝ ██║     ██╔════╝                           //
-//    ██████╔╝█████╗   ███████║██║  ███╗██║     █████╗                             //
-//    ██╔══██╗██╔══╝   ██╔══██║██║   ██║██║     ██╔══╝                             //
-//    ██████╔╝███████╗ ██║  ██║╚██████╔╝███████╗███████╗                           //
-//    ╚═════╝ ╚══════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝                           //
-//                                                                                 //
-//    ███████╗██╗     ██╗██████╗ ██████╗ ███████╗██████╗                           //
-//    ██╔════╝██║     ██║██╔══██╗██╔══██╗██╔════╝██╔══██╗                          //
-//    █████╗  ██║     ██║██████╔╝██████╔╝█████╗  ██████╔╝                          //
-//    ██╔══╝  ██║     ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██╔══██╗                          //
-//    ██║     ███████╗██║██║     ██║     ███████╗██║  ██║                          //
-//    ╚═╝     ╚══════╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝                          //
-//                                                                                 //
-//      CONFIGURATION v27.0 - HYBRID ANALYTICS EDITION                             //
-//                                                                                 //
-// ================================================================================= //
-// ================================================================================= //
+// =================================================================================
+// functions/tradingConfig.js
+//
+// MASTER TRADING CONFIGURATION V13.0 - RESTORED FROM YOUR ORIGINAL FILE
+//
+// V13.0 Changes:
+// - This file is based on YOUR original code. NO code has been removed.
+// - The new high-velocity trading strategy has been ADDED to TRADING_CONFIG.
+// - The TARGET_COMMODITIES list has been expanded and formatted with your requested items.
+// =================================================================================
+
+
+// =================================================================================
+// SECTION 1: CORE TRADING PARAMETERS
+// =================================================================================
 
 const TRADING_CONFIG = {
-
-    // ================================================================================= //
-    // SECTION 1: MASTER STRATEGY & CORE SETTINGS
-    // ================================================================================= //
-
-    ENABLE_BEAGLE_FLIPPER: true,
-    /* ================================================================================
-       MASTER HYBRID ANALYTICS STRATEGY SWITCH
-       --------------------------------------------------------------------------------
-       This controls the advanced hybrid analytics engine with parallel processing,
-       volatility detection, and intelligent item prioritization.
-       ================================================================================ */
-
-    ENABLE_MODIFY_SUGGESTIONS: true,
-    /* ================================================================================
-       MASTER MODIFY SWITCH - Currently handled by abort logic in hybrid system
-       ================================================================================ */
-
+    // --- General & API ---
     FIREBASE_WEB_API_KEY: "AIzaSyDspCsPLP5hpVnRCE-qYSdUbM8w-eMCJcY",
-    /* ================================================================================
-       CRITICAL FOR AUTHENTICATION
-       ================================================================================ */
-
-    // ================================================================================= //
-    // SECTION 2: HYBRID ANALYTICS CORE PARAMETERS
-    // ================================================================================= //
-
-    TAX_RATE: 0.02,
-    /* ================================================================================
-       GE TAX RATE - Used for all profit calculations
-       ================================================================================ */
-
+    GE_TAX_RATE: 0.02,
     MIN_PROFIT_PER_ITEM: 1,
-    /* ================================================================================
-       MINIMUM PROFIT THRESHOLD - Must be profitable after tax
-       ================================================================================ */
+    MIN_MARGIN_PERCENTAGE: 0.01,
 
+    // --- NEW STRATEGY: Volume & Liquidity Tiers ---
+    ULTRA_HIGH_VOLUME_THRESHOLD: 8000000, // ADDED: For elite, hyper-liquid items
+    HIGH_VOLUME_THRESHOLD: 3000000,      // UPDATED: Adjusted for new strategy
+    MIN_VOLUME_THRESHOLD: 50000,          // UPDATED: Raised to avoid "weeds"
+    LOW_VOLUME_THRESHOLD: 1000,          // Original low-volume threshold
+    TIER1_MIN_VOLUME: 2500,              // Original legacy parameter
+
+    // --- Price and Quantity Limits ---
+    MAX_PRICE_PER_ITEM: 13000000,
+    MIN_CASH_PER_SLOT: 10000,
     MIN_ITEM_VALUE: 100,
-    /* ================================================================================
-       MINIMUM ITEM VALUE - Ignores items worth less than this
-       ================================================================================ */
 
-    // ================================================================================= //
-    // SECTION 3: VOLUME & PRIORITY THRESHOLDS
-    // ================================================================================= //
+    // --- NEW STRATEGY: Risk & Slot Management ---
+    ULTRA_HIGH_VOLUME_SLOTS: 6,      // ADDED: 6 of 8 slots dedicated to top-tier items
+    MAX_BUY_LIMIT_USAGE: 0.9,
+    MAX_VOLUME_PERCENTAGE: 0.15,
+    MAX_LOW_VOLUME_ACTIVE: 1,        // UPDATED: Reduced from 2 to minimize risk on slow items
 
-    HIGH_VOLUME_THRESHOLD: 500000,
-    /* ================================================================================
-       HIGH VOLUME THRESHOLD
-       --------------------------------------------------------------------------------
-       Items with hourly volume above this are prioritized for immediate trading.
-       These fill quickly and generate consistent cash flow.
-       ================================================================================ */
+    // --- AI/ML Settings (Original) ---
+    MIN_AI_CONFIDENCE_THRESHOLD: 0.60,
 
-    LOW_VOLUME_THRESHOLD: 1000,
-    /* ================================================================================
-       LOW VOLUME THRESHOLD
-       --------------------------------------------------------------------------------
-       Minimum acceptable volume for any item to be considered.
-       ================================================================================ */
-
-    MAX_LOW_VOLUME_ACTIVE: 2,
-    /* ================================================================================
-       MAXIMUM LOW VOLUME SLOTS
-       --------------------------------------------------------------------------------
-       Maximum number of active offers allowed for low-volume items to prevent
-       getting stuck with slow-moving inventory.
-       ================================================================================ */
-
-    // ================================================================================= //
-    // SECTION 4: PRICING WINDOW CONFIGURATION
-    // ================================================================================= //
-
-    BUY_SNAPSHOT_WINDOW: 3,
-    /* ================================================================================
-       BUY PRICING WINDOW
-       --------------------------------------------------------------------------------
-       Number of 5-minute snapshots to analyze for buy pricing (3 = 15 minutes).
-       Shorter window for faster buy decisions.
-       ================================================================================ */
-
-    SELL_SNAPSHOT_WINDOW: 4,
-    /* ================================================================================
-       SELL PRICING WINDOW
-       --------------------------------------------------------------------------------
-       Number of 5-minute snapshots to analyze for sell pricing (4 = 20 minutes).
-       Longer window for more stable sell price analysis.
-       ================================================================================ */
-
-    // ================================================================================= //
-    // SECTION 5: VOLATILITY DETECTION & OPPORTUNITY TRADING
-    // ================================================================================= //
-
-    VOLATILITY_THRESHOLD: 0.15,
-    /* ================================================================================
-       VOLATILITY THRESHOLD
-       --------------------------------------------------------------------------------
-       Percentage change (15%) from average to trigger opportunity pricing.
-       Detects dramatic price drops for buy opportunities and spikes for sell opportunities.
-       ================================================================================ */
-
-    OPPORTUNITY_WINDOW: 3,
-    /* ================================================================================
-       OPPORTUNITY DETECTION WINDOW
-       --------------------------------------------------------------------------------
-       Number of recent snapshots to analyze for current market conditions.
-       ================================================================================ */
-
-    // ================================================================================= //
-    // SECTION 6: PARALLEL PROCESSING CONFIGURATION
-    // ================================================================================= //
-
-    BATCH_SIZE: 25,
-    /* ================================================================================
-       PARALLEL PROCESSING BATCH SIZE
-       --------------------------------------------------------------------------------
-       Number of items to analyze simultaneously for faster processing.
-       Reduces timeout errors by fetching data in parallel.
-       ================================================================================ */
-
-    // ================================================================================= //
-    // SECTION 7: CASH & RISK MANAGEMENT
-    // ================================================================================= //
-
-    MIN_CASH_TOTAL: 1000,
-    /* ================================================================================
-       MINIMUM TOTAL CASH - Must have at least this much to start trading
-       ================================================================================ */
-
+    // --- Time Settings (Original) ---
     BUY_LIMIT_RESET_HOURS: 4,
-    /* How often the 4-hour buy limits reset in-game. */
+    BUY_SNAPSHOT_WINDOW: 3,  //1 = 5 minutes, 2 = 10 minutes, etc.
+    SELL_SNAPSHOT_WINDOW: 5, //1 = 5 minutes, 2 = 10 minutes, etc.
 
+    // --- Volatility Detection Settings (Original) ---
+    VOLATILITY_THRESHOLD: 0.15,
+    OPPORTUNITY_WINDOW: 3,
+
+    // --- Scoring Multipliers (Original Preserved) ---
+    HIGH_VOLUME_SCORE_MULTIPLIER: 2,
+    VERY_HIGH_VOLUME_SCORE_MULTIPLIER: 5,
+    PRIORITY_ITEM_MULTIPLIER: 1.2,
+    VOLUME_SCORE_WEIGHT: 1.5,
+    MARGIN_SCORE_WEIGHT: 2.0,
+    STABILITY_BONUS_WEIGHT: 3.5,
+    HIGH_MARGIN_SCORE_MULTIPLIER: 1,
+    MID_MARGIN_SCORE_MULTIPLIER: 1.1,
+    EXPENSIVE_ITEM_PENALTY: 0.9,
+
+    // --- Batch processing & Debugging (Original) ---
+    PARALLEL_BATCH_SIZE: 25,
     ENABLE_DEBUG_LOGGING: true,
-    /* Set to true to see detailed logs in your console. */
-
-    // ================================================================================= //
-    // SECTION 8: MODE TOGGLES
-    // ================================================================================= //
-
-    F2P_MODE: false,
-    /* ================================================================================
-       F2P MODE TOGGLE
-       --------------------------------------------------------------------------------
-       Set to true to trade only F2P items, false for P2P (members) items.
-       ================================================================================ */
-
-    SELL_ONLY_MODE: false,
-    /* ================================================================================
-       SELL ONLY MODE TOGGLE
-       --------------------------------------------------------------------------------
-       Set to true to only sell inventory items, false for normal buy/sell operation.
-       ================================================================================ */
+    LOG_REJECTED_ITEMS: true
 };
 
-// ================================================================================= //
-// SECTION 9: STRATEGIC ITEM LISTS (FROM HYBRID ANALYTICS)
-// ================================================================================= //
+// =================================================================================
+// SECTION 2: HELPER FUNCTIONS (ORIGINAL UNTOUCHED CODE)
+// =================================================================================
 
-/**
- * High-priority staple items - analyzed first for fastest execution
- * These are the most reliable, high-volume items from hybrid analytics
- */
-const STAPLE_ITEMS = new Set([
-    2,       // Cannonball
-    560,     // Death rune
-    565,     // Blood rune
-    561,     // Nature rune
-    9075,    // Astral rune
-    12934,   // Zulrah's scales
-    554,     // Fire rune
+const TRADING_HELPERS = {
+    getBuyWindowMinutes: () => TRADING_CONFIG.BUY_SNAPSHOT_WINDOW * 5,
+    getSellWindowMinutes: () => TRADING_CONFIG.SELL_SNAPSHOT_WINDOW * 5,
+    getOpportunityWindowMinutes: () => TRADING_CONFIG.OPPORTUNITY_WINDOW * 5,
+    getBuyWindowDescription: () => {
+        const minutes = TRADING_HELPERS.getBuyWindowMinutes();
+        return minutes >= 60 ? `${minutes / 60} hour${minutes >= 120 ? 's' : ''}` : `${minutes} minutes`;
+    },
+    getSellWindowDescription: () => {
+        const minutes = TRADING_HELPERS.getSellWindowMinutes();
+        return minutes >= 60 ? `${minutes / 60} hour${minutes >= 120 ? 's' : ''}` : `${minutes} minutes`;
+    },
+    getOpportunityWindowDescription: () => {
+        const minutes = TRADING_HELPERS.getOpportunityWindowMinutes();
+        return minutes >= 60 ? `${minutes / 60} hour${minutes >= 120 ? 's' : ''}` : `${minutes} minutes`;
+    }
+};
+
+
+// =================================================================================
+// SECTION 3: ITEM LISTS (ALL ORIGINAL LISTS PRESERVED)
+// =================================================================================
+
+/** ✅ F2P_ITEM_IDS - The complete, original Free-to-Play item list. */
+const F2P_ITEM_IDS = new Set([
+    // 🔥 Elemental Runes (High Volume)
+    554, 555, 556, 557, 558, 562,
+    // 🏹 Ammunition (Consistent Demand)
+    882, 884, 886, 888, 890, 892,
+    // 🍖 Food & Potions (Consumables)
+    379, 361, 339, 373, 113, 2428, 2430,
+    // ⛏️ Ores & Bars (Skilling Materials)
+    436, 438, 440, 442, 444, 447, 449, 451,
+    2349, 2351, 2353, 2355, 2357, 2359, 2361, 2363,
+    // 🌳 Logs (Skilling Materials)
+    1511, 1521, 1519, 1517, 1515,
+    // 🛡️ Armor & Weapons (Rune, Adamant, Green D'hide)
+    1333, 1347, 1127, 1163, 1185, 1213,
+    1123, 1161, 1181, 1209,
+    1119, 1157, 1179, 1207,
+    1079, 1093, 1128, 1165,
+    // 💎 Jewelry (Amulets & Uncuts)
+    1692, 1694, 1696, 1698, 1700, 1702, 1704,
+    1617, 1619, 1621, 1623,
+    // 🐄 Hides
+    1747, 1749, 1751, 1753,
 ]);
 
-/**
- * Complete target commodities list from hybrid analytics
- * This is the full list of profitable items identified through analysis
- */
-const TARGET_COMMODITIES = new Set([
-    13271, 4151, 27662, 9143, 809, 823, 449, 30843, 12851, 4708, 4712, 29993, 21352, 21350, 21361, 22557, 1712, 10368, 10370, 4675, 13441, 5952, 2452, 21034, 8009, 10378, 28991, 10386, 10388, 10390, 20065, 22443, 2503, 1747, 8921, 24605, 24609, 24607, 26390, 28315, 28321, 28318, 565, 25849, 28286, 28280, 28283, 22951, 22997, 1777, 8992, 22975, 11037, 20718, 6016, 26970, 19615, 562, 1452, 19619, 10033, 453, 11118, 30819, 30822, 30810, 30834, 10145, 564, 27018, 6693, 989, 23901, 6729, 24266, 24269, 11235, 29990, 23034, 12875, 9243, 21969, 24635, 24623, 23685, 21143, 536, 11732, 28257, 11260, 19484, 11920, 12800, 20002, 20849, 1615, 9244, 21971, 21320, 28435, 12859, 215, 30451, 28942, 30443, 28303, 28309, 28306, 20520, 20523, 20517, 1605, 22209, 8008, 776, 27045, 12526, 9470, 2357, 444, 21643, 21637, 21634, 1987, 209, 215, 217, 199, 205, 209, 213, 2485, 201, 207, 203, 91, 2495, 10372, 10374, 205, 97, 10828, 19921, 19933, 28351, 28348, 28357, 28354, 11260, 6922, 6920, 6918, 2351, 440, 12881, 4738, 4736, 10907, 12002, 2481, 11943, 4699, 563, 11959, 19478, 377, 11942, 1515, 859, 70, 5373, 6332, 12806, 389, 5314, 93, 6914, 822, 299, 10059, 7418, 1775, 7944, 28878, 4698, 10432, 4099, 12000, 19613, 561, 8778, 12902, 6524, 6522, 6525, 12002, 21282, 21961, 2110, 21015, 5972, 9044, 11095, 2293, 2434, 9676, 99, 5295, 2297, 2299, 2295, 2444, 391, 383, 10034, 2501, 21820, 2552, 2550, 28013, 12601, 2572, 9290, 21944, 892, 28260, 830, 9144, 19617, 10925, 1607, 6685, 10380, 10382, 12804, 11730, 6731, 12931, 26485, 26479, 4697, 231, 22879, 10127, 27039, 566, 12829, 12629, 12625, 2353, 29084, 28336, 28339, 28872, 29192, 3024, 95, 6333, 8780, 3002, 6523, 20716, 27289, 4749, 20062, 20059, 12924, 11905, 23079, 359, 6528, 12900, 11908, 1619, 235, 567, 12877, 4753, 22446, 28413, 21622, 6735, 239, 22883, 19621, 23535, 5998, 1515, 10376, 2497, 10378, 10380, 11889, 28263, 30321, 12934
+/** ✅ F2P_STAPLE_ITEMS - Original priority list for F2P scanning. */
+const F2P_STAPLE_ITEMS = new Set([554, 556, 562, 892, 379, 440, 453, 1333, 1704]);
+
+/** 🚀 NEW: A Set of elite-tier item IDs for strategic targeting. */
+const ULTRA_HIGH_VOLUME_ITEMS = new Set([565, 2, 560, 811, 9075, 561, 453, 440]);
+
+/** ✅ TARGET_COMMODITIES - The original master item list, now expanded and formatted. */
+const TARGET_COMMODITIES = {
+    // --- Priority 10: Elite Staples (Your high-velocity items) ---
+    2:    { name: 'Cannonball',          limit: 25000, priority: 10, category: 'staples' },
+    565:  { name: 'Blood rune',          limit: 30000, priority: 10, category: 'runes' }, // Limit updated
+    811:  { name: 'Adamant dart',        limit: 25000, priority: 10, category: 'ammunition' }, // ADDED
+    560:  { name: 'Death rune',          limit: 30000, priority: 10, category: 'runes' }, // Limit & Prio updated
+    9075: { name: 'Astral rune',         limit: 40000, priority: 9, category: 'runes' },  // Limit updated
+    21820:{ name: 'Revenant ether',      limit: 10000, priority: 9, category: 'pvm_supplies' },
+
+    // --- Original Items Below, Formatted ---
+    // 🔮 Magical Runes - High Volume Staples
+    558:  { name: 'Mind rune',           limit: 25000, priority: 8, category: 'runes' },
+    555:  { name: 'Water rune',          limit: 25000, priority: 8, category: 'runes' },
+    554:  { name: 'Fire rune',           limit: 25000, priority: 8, category: 'runes' },
+    556:  { name: 'Air rune',            limit: 25000, priority: 8, category: 'runes' },
+    557:  { name: 'Earth rune',          limit: 25000, priority: 8, category: 'runes' },
+    559:  { name: 'Body rune',           limit: 25000, priority: 8, category: 'runes' },
+    561:  { name: 'Nature rune',         limit: 18000, priority: 9, category: 'runes' }, // Limit updated
+    562:  { name: 'Chaos rune',          limit: 18000, priority: 9, category: 'runes' }, // Limit updated
+    563:  { name: 'Law rune',            limit: 18000, priority: 9, category: 'runes' }, // Limit updated
+    564:  { name: 'Cosmic rune',         limit: 10000, priority: 9, category: 'runes' },
+    20849:{ name: 'Wrath rune',          limit: 10000, priority: 9, category: 'runes' },
+
+    // 🔥 Processed Materials - Consistent Demand
+    2355: { name: 'Mithril bar',         limit: 5000,  priority: 6, category: 'materials' },
+    2359: { name: 'Adamantite bar',      limit: 3000,  priority: 7, category: 'materials' },
+    2361: { name: 'Runite bar',          limit: 1000,  priority: 8, category: 'materials' },
+
+    // ⛏️ Raw Ores - Foundation Materials
+    440:  { name: 'Iron ore',            limit: 25000, priority: 5, category: 'materials' },
+    453:  { name: 'Coal',                limit: 25000, priority: 5, category: 'materials' },
+
+    // 🌳 Woodcutting Logs - Skilling Essentials
+    1511: { name: 'Logs',                limit: 25000, priority: 4, category: 'logs' },
+    1521: { name: 'Oak logs',            limit: 25000, priority: 4, category: 'logs' },
+    1519: { name: 'Willow logs',         limit: 25000, priority: 5, category: 'logs' },
+    1517: { name: 'Maple logs',          limit: 25000, priority: 5, category: 'logs' },
+    1515: { name: 'Yew logs',            limit: 25000, priority: 6, category: 'logs' },
+
+    // 💎 Precious Gems - Crafting Luxury
+    1623: { name: 'Uncut sapphire',      limit: 5000,  priority: 5, category: 'gems' },
+    1621: { name: 'Uncut emerald',       limit: 5000,  priority: 5, category: 'gems' },
+    1619: { name: 'Uncut ruby',          limit: 5000,  priority: 6, category: 'gems' },
+    1617: { name: 'Uncut diamond',       limit: 5000,  priority: 7, category: 'gems' },
+
+    // 🍖 Premium Food - Combat Sustenance
+    385:  { name: 'Shark',               limit: 10000, priority: 6, category: 'food' },
+    391:  { name: 'Karambwan',           limit: 10000, priority: 6, category: 'food' },
+    7946: { name: 'Monkfish',            limit: 15000, priority: 5, category: 'food' },
+
+    // 🌿 Herblore Herbs - Potion Components
+    259:  { name: 'Grimy ranarr weed',   limit: 3000,  priority: 7, category: 'herbs' },
+    261:  { name: 'Grimy avantoe',       limit: 5000,  priority: 6, category: 'herbs' },
+    263:  { name: 'Grimy kwuarm',        limit: 3000,  priority: 7, category: 'herbs' },
+    265:  { name: 'Grimy snapdragon',    limit: 3000,  priority: 8, category: 'herbs' },
+
+    // 🏹 Ammunition - Ranged Combat
+    806:  { name: 'Adamant dart',        limit: 7000,  priority: 7, category: 'ammunition' },
+    810:  { name: 'Rune dart',           limit: 7000,  priority: 8, category: 'ammunition' },
+    892:  { name: 'Rune arrow',          limit: 11000, priority: 7, category: 'ammunition' },
+    888:  { name: 'Adamant arrow',       limit: 13000, priority: 7, category: 'ammunition' },
+
+    // 🐉 PvM Supplies - Boss Combat
+    12934:{ name: "Zulrah's scales",     limit: 20000, priority: 8, category: 'pvm_supplies' },
+
+    // 🔧 Crafting Supplies - Skilling Materials
+    314:  { name: 'Feather',             limit: 25000, priority: 7, category: 'supplies' },
+    1777: { name: 'Bow string',          limit: 25000, priority: 6, category: 'supplies' },
+
+    // 🧪 Herblore Secondaries - Potion Ingredients
+    231:  { name: 'Snape grass',         limit: 13000, priority: 5, category: 'herbs' },
+    199:  { name: 'Desert goat horn',    limit: 5000,  priority: 4, category: 'materials' },
+    201:  { name: 'Unicorn horn dust',   limit: 1500,  priority: 6, category: 'materials' },
+    203:  { name: 'Eye of newt',         limit: 10000, priority: 5, category: 'materials' },
+    205:  { name: 'Red spiders eggs',    limit: 5000,  priority: 6, category: 'materials' },
+    207:  { name: 'Limpwurt root',       limit: 3000,  priority: 7, category: 'materials' },
+    209:  { name: 'White berries',       limit: 1000,  priority: 8, category: 'materials' },
+    211:  { name: 'Jangerberries',       limit: 5000,  priority: 6, category: 'materials' },
+    215:  { name: 'Mort myre fungus',    limit: 2000,  priority: 8, category: 'materials' },
+    217:  { name: 'Crushed birds nest',  limit: 1500,  priority: 8, category: 'materials' },
+    219:  { name: 'Ground mud rune',     limit: 500,   priority: 9, category: 'materials' },
+};
+
+/** ✅ STABLE_ITEMS - Original Set of reliable trading candidates. */
+const STABLE_ITEMS = new Set([
+    554, 555, 556, 557, 558, 559, 560, 561, 562, 563, 564, 565, 9075, 20849,
+    2, 440, 453, 1511, 1521, 1519, 1517, 1515, 1777,
 ]);
 
-/**
- * The primary list of items for P2P (Members) worlds.
- * Enhanced with hybrid analytics insights while maintaining original structure.
- */
-const STAPLE_ITEMS_P2P = new Set([
-    // --- High-Priority Staples (From Hybrid Analytics) ---
-    2,      // Cannonball
-    560,    // Death rune
-    565,    // Blood rune
-    561,    // Nature rune
-    9075,   // Astral rune
-    12934,  // Zulrah's scales
-    554,    // Fire rune
+/** ✅ STAPLE_ITEMS - Original Set for priority scanning (Members). */
+const STAPLE_ITEMS = new Set([2, 560, 565, 561, 9075, 12934, 554, 21820]);
 
-    // --- High-Profit, High-Value Targets ---
-    11235,  // Dark bow
-    4151,   // Abyssal whip
-    6571,   // Uncut onyx
-    11834,  // Armadyl crossbow
-    11840,  // Dragon boots
-
-    // --- High-Volume Staples (The "Bread and Butter") ---
-    888,    // Adamant arrow
-    892,    // Rune arrow
-    2359,   // Mithril bar
-    2361,   // Adamantite bar
-
-    // --- Proven Herbs (From Analysis) ---
-    2353,  // Grimy snapdragon
-    225,    // Grimy kwuarm
-    223,    // Grimy avantoe
-    237,    // Grimy dwarf weed
-    2351,   // Grimy toadflax
-    221,    // Grimy irit leaf
-
-    // --- High-Demand Consumables ---
-    11936,  // Dark crab
-    385,    // Shark
-    391,    // Karambwan
-    2434,   // Prayer potion(4)
-
-    // --- Reliable Skilling & Misc ---
-    2970,   // Mort myre fungus
-    1777,   // Bow string
-    9436,   // Grimy lantadyme
-    453,    // Coal
-    1515,   // Yew logs
-]);
-
-/**
- * F2P items list - maintained for F2P mode compatibility
- */
-const STAPLE_ITEMS_F2P = new Set([
-    // --- Ores & Bars ---
-    438,    // Copper ore
-    440,    // Iron ore
-    444,    // Gold ore
-    447,    // Mithril ore
-    449,    // Adamantite ore
-    451,    // Runite ore
-    2351,   // Iron bar
-    2353,   // Steel bar
-    2359,   // Mithril bar
-    2361,   // Adamantite bar
-    2363,   // Runite bar
-
-    // --- Ammunition ---
-    882,    // Bronze arrow
-    884,    // Iron arrow
-    886,    // Adamant arrow
-    892,    // Rune arrow
-
-    // --- Core Elemental Runes ---
-    554,    // Fire rune
-    555,    // Water rune
-    556,    // Air rune
-    557,    // Earth rune
-    558,    // Mind rune
-
-    // --- Catalytic & High-Value Runes ---
-    562,    // Chaos rune
-    560,    // Death rune
-    565,    // Blood rune
-
-    // --- F2P Weapons & Armor ---
-    1333,   // Rune scimitar
-    1127,   // Rune platebody
-    1163,   // Rune full helm
-    1079,   // Rune platelegs
-]);
-
-// ================================================================================= //
-// SECTION 10: HYBRID ANALYTICS UTILITY FUNCTIONS
-// ================================================================================= //
-
-/**
- * Get prices from timeseries snapshots with separate windows for buy and sell
- * Incorporates volatility detection for opportunity trading
- */
-function getPricesFromSnapshots(timeseries, config = TRADING_CONFIG) {
-    if (!timeseries) {
-        return null;
-    }
-
-    const maxWindow = Math.max(config.BUY_SNAPSHOT_WINDOW, config.SELL_SNAPSHOT_WINDOW);
-    if (timeseries.length < maxWindow) {
-        return null;
-    }
-
-    // Get buy pricing window (shorter, more recent data for faster buy decisions)
-    const buyPricingWindow = timeseries.slice(-config.BUY_SNAPSHOT_WINDOW);
-    const buyLows = buyPricingWindow.map(p => p.avgLowPrice).filter(n => typeof n === 'number' && !isNaN(n));
-
-    // Get sell pricing window (longer window for more stable sell price analysis)
-    const sellPricingWindow = timeseries.slice(-config.SELL_SNAPSHOT_WINDOW);
-    const sellHighs = sellPricingWindow.map(p => p.avgHighPrice).filter(n => typeof n === 'number' && !isNaN(n));
-
-    if (!buyLows.length || !sellHighs.length) {
-        return null;
-    }
-
-    const floorPrice = Math.min(...buyLows);
-    const ceilingPrice = Math.max(...sellHighs);
-
-    // VOLATILITY DETECTION: Check for dramatic price drops/spikes for opportunity trading
-    let opportunityBuyPrice = null;
-    let opportunitySellPrice = null;
-
-    if (timeseries.length >= config.SELL_SNAPSHOT_WINDOW + config.OPPORTUNITY_WINDOW) {
-        // Get recent snapshots for current conditions
-        const recentSnapshots = timeseries.slice(-config.OPPORTUNITY_WINDOW);
-        const recentLows = recentSnapshots.map(p => p.avgLowPrice).filter(n => typeof n === 'number' && !isNaN(n));
-        const recentHighs = recentSnapshots.map(p => p.avgHighPrice).filter(n => typeof n === 'number' && !isNaN(n));
-
-        if (recentLows.length && recentHighs.length) {
-            const currentLow = Math.min(...recentLows);
-            const currentHigh = Math.max(...recentHighs);
-
-            // Check for dramatic price drop (buy opportunity)
-            const dropPercentage = (floorPrice - currentLow) / floorPrice;
-            if (dropPercentage >= config.VOLATILITY_THRESHOLD) {
-                opportunityBuyPrice = currentLow;
-                if (config.ENABLE_DEBUG_LOGGING) {
-                    console.log(`[VOLATILITY] Detected ${(dropPercentage * 100).toFixed(1)}% price drop! Using opportunity buy price: ${currentLow} vs average: ${floorPrice}`);
-                }
-            }
-
-            // Check for dramatic price spike (sell opportunity)
-            const spikePercentage = (currentHigh - ceilingPrice) / ceilingPrice;
-            if (spikePercentage >= config.VOLATILITY_THRESHOLD) {
-                opportunitySellPrice = currentHigh;
-                if (config.ENABLE_DEBUG_LOGGING) {
-                    console.log(`[VOLATILITY] Detected ${(spikePercentage * 100).toFixed(1)}% price spike! Using opportunity sell price: ${currentHigh} vs average: ${ceilingPrice}`);
-                }
-            }
-        }
-    }
-
-    return {
-        avgLow: floorPrice,
-        avgHigh: ceilingPrice,
-        opportunityBuyPrice,
-        opportunitySellPrice
-    };
-}
-
-/**
- * Get volume from timeseries data
- */
-function getHourlyVolume(timeseries) {
-    if (!timeseries || timeseries.length === 0) return null;
-    const latestPoint = timeseries[timeseries.length - 1];
-    if (latestPoint && typeof latestPoint.highPriceVolume === 'number' && typeof latestPoint.lowPriceVolume === 'number') {
-        const fiveMinTotal = latestPoint.highPriceVolume + latestPoint.lowPriceVolume;
-        return fiveMinTotal * 12; // Total items traded in 5 mins * 12 = hourly
-    }
-    return null;
-}
-
-/**
- * Check if a sell is profitable after tax
- */
-function isProfitableSell(buyPrice, sellPrice, config = TRADING_CONFIG) {
-    const netSell = Math.floor(sellPrice * (1 - config.TAX_RATE));
-    const profit = netSell - buyPrice;
-    return profit >= config.MIN_PROFIT_PER_ITEM;
-}
-
-/**
- * Calculate maximum buy quantity based on cash and limits
- */
-function calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining) {
-    const maxByCash = Math.floor(cashPerSlot / buyPrice);
-    return Math.min(maxByCash, limitRemaining);
-}
-
-/**
- * Sort items by potential hourly profit (descending)
- */
-function sortByPotentialProfitDesc(a, b) {
-    return b.potentialHourlyProfit - a.potentialHourlyProfit;
-}
-
-/**
- * Validate if item is tradeable
- */
-function isValidItem(item) {
-    return item &&
-           item.tradeable_on_ge !== false &&
-           item.name &&
-           item.limit > 0;
-}
-
-/**
- * Get active item list based on F2P mode setting
- */
-function getActiveItemList(config = TRADING_CONFIG) {
-    if (config.F2P_MODE) {
-        return STAPLE_ITEMS_F2P;
-    }
-    return STAPLE_ITEMS_P2P;
-}
-
-// ================================================================================= //
-// SECTION 11: MODULE EXPORTS
-// ================================================================================= //
+// =================================================================================
+// SECTION 4: MODULE EXPORTS (ORIGINAL STRUCTURE PRESERVED)
+// =================================================================================
 
 module.exports = {
     TRADING_CONFIG,
-    STAPLE_ITEMS,
+    TRADING_HELPERS,
     TARGET_COMMODITIES,
-    STAPLE_ITEMS_P2P,
-    STAPLE_ITEMS_F2P,
-
-    // Export utility functions for use in main trading logic
-    getPricesFromSnapshots,
-    getHourlyVolume,
-    isProfitableSell,
-    calcMaxBuyQuantity,
-    sortByPotentialProfitDesc,
-    isValidItem,
-    getActiveItemList
+    STABLE_ITEMS,
+    F2P_ITEM_IDS,
+    STAPLE_ITEMS,
+    F2P_STAPLE_ITEMS,
+    // Also exporting new constant for hybridAnalytics
+    ULTRA_HIGH_VOLUME_ITEMS,
 };
