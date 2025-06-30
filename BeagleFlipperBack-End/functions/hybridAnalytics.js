@@ -1,352 +1,255 @@
-// ================================================================================= //
-// ================================================================================= //
-//                                                                                 //
-//    ██████╗ ███████╗  █████╗  ██████╗ ██╗     ███████╗                           //
-//    ██╔══██╗██╔════╝ ██╔══██╗██╔════╝ ██║     ██╔════╝                           //
-//    ██████╔╝█████╗   ███████║██║  ███╗██║     █████╗                             //
-//    ██╔══██╗██╔══╝   ██╔══██║██║   ██║██║     ██╔══╝                             //
-//    ██████╔╝███████╗ ██║  ██║╚██████╔╝███████╗███████╗                           //
-//    ╚═════╝ ╚══════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝                           //
-//                                                                                 //
-//    ███████╗██╗     ██╗██████╗ ██████╗ ███████╗██████╗                           //
-//    ██╔════╝██║     ██║██╔══██╗██╔══██╗██╔════╝██╔══██╗                          //
-//    █████╗  ██║     ██║██████╔╝██████╔╝█████╗  ██████╔╝                          //
-//    ██╔══╝  ██║     ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██╔══██╗                          //
-//    ██║     ███████╗██║██║     ██║     ███████╗██║  ██║                          //
-//    ╚═╝     ╚══════╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝                          //
-//                                                                                 //
-//      TRADING ENGINE v27.0 - UPGRADED WITH ADVANCED VOLATILITY LOGIC             //
-//                                                                                 //
-// ================================================================================= //
-// ================================================================================= //
+/**
+ * hybridAnalytics.js - UPDATED TO USE CENTRALIZED CONFIG
+ * This version now imports all configuration and utility functions from tradingConfig.js
+ * to eliminate duplication and ensure consistency across the application.
+ */
 
-
-// ================================================================================= //
-// SECTION 1: IMPORTS & SETUP
-// ================================================================================= //
 const wikiApi = require('./wikiApiHandler');
 const { getRecentlyBoughtQuantities } = require('./buyLimitTracker');
+
+// Import everything from the centralized config
 const {
     TRADING_CONFIG,
-    STAPLE_ITEMS_P2P,
-    STAPLE_ITEMS_F2P,
+    STAPLE_ITEMS,
+    TARGET_COMMODITIES,
+    getPricesFromSnapshots,
+    getHourlyVolume,
+    isProfitableSell,
+    calcMaxBuyQuantity,
+    sortByPotentialProfitDesc,
+    isValidItem,
+    getActiveItemList
 } = require('./tradingConfig');
 
-
-// ================================================================================= //
-// SECTION 2: CORE UTILITY & ADVANCED ANALYSIS FUNCTIONS
-// ================================================================================= //
-// This section now includes the more advanced analysis functions from your successful old script.
-
 /**
- * A simple check to ensure an item object from the API is valid and tradeable.
+ * NEW: Fetches and analyzes a batch of items in parallel to significantly speed up the process.
+ * @returns An array of profitable flip objects.
  */
-function isValidItem(item) {
-    return item && item.tradeable_on_ge !== false && item.name && item.limit > 0;
-}
+async function analyzeItemBatch(ids, cashPerSlot, recentlyBoughtMap, marketData) {
+    const promises = ids.map(async (id) => {
+        try {
+            const mapEntry = marketData.mapping.find(m => m.id === id);
+            if (!isValidItem(mapEntry)) return null;
 
-/**
- * Calculates the maximum number of an item we can buy based on our available cash
- * per slot and the item's 4-hour buy limit.
- */
-function calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining) {
-    if (buyPrice <= 0) {
-        return 0;
-    }
-    const maxByCash = Math.floor(cashPerSlot / buyPrice);
-    return Math.min(maxByCash, limitRemaining);
-}
-
-/**
- * UPGRADED: Gets prices from timeseries snapshots with separate windows for buy and sell,
- * and includes volatility detection, just like your successful old script.
- */
-function getPricesFromSnapshots(timeseries) {
-    if (!timeseries) {
-        return null;
-    }
-
-    const { BUY_SNAPSHOT_WINDOW, SELL_SNAPSHOT_WINDOW, OPPORTUNITY_WINDOW, VOLATILITY_THRESHOLD } = TRADING_CONFIG;
-
-    const maxWindow = Math.max(BUY_SNAPSHOT_WINDOW, SELL_SNAPSHOT_WINDOW);
-    if (timeseries.length < maxWindow) {
-        return null; // Not enough data
-    }
-
-    const buyPricingWindow = timeseries.slice(-BUY_SNAPSHOT_WINDOW);
-    const buyLows = buyPricingWindow.map(p => p.avgLowPrice).filter(n => typeof n === 'number' && !isNaN(n));
-
-    const sellPricingWindow = timeseries.slice(-SELL_SNAPSHOT_WINDOW);
-    const sellHighs = sellPricingWindow.map(p => p.avgHighPrice).filter(n => typeof n === 'number' && !isNaN(n));
-
-    if (!buyLows.length || !sellHighs.length) {
-        return null;
-    }
-
-    const floorPrice = Math.min(...buyLows);
-    const ceilingPrice = Math.max(...sellHighs);
-
-    let opportunityBuyPrice = null;
-    let opportunitySellPrice = null;
-
-    if (timeseries.length >= SELL_SNAPSHOT_WINDOW + OPPORTUNITY_WINDOW) {
-        const recentSnapshots = timeseries.slice(-OPPORTUNITY_WINDOW);
-        const recentLows = recentSnapshots.map(p => p.avgLowPrice).filter(n => typeof n === 'number' && !isNaN(n));
-        const recentHighs = recentSnapshots.map(p => p.avgHighPrice).filter(n => typeof n === 'number' && !isNaN(n));
-
-        if (recentLows.length && recentHighs.length) {
-            const currentLow = Math.min(...recentLows);
-            const currentHigh = Math.max(...recentHighs);
-
-            const dropPercentage = (floorPrice - currentLow) / floorPrice;
-            if (dropPercentage >= VOLATILITY_THRESHOLD) {
-                opportunityBuyPrice = currentLow;
-                if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-                    console.log(`[VOLATILITY] Detected ${(dropPercentage * 100).toFixed(1)}% price drop on item!`);
-                }
-            }
-
-            const spikePercentage = (currentHigh - ceilingPrice) / ceilingPrice;
-            if (spikePercentage >= VOLATILITY_THRESHOLD) {
-                opportunitySellPrice = currentHigh;
-                if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-                    console.log(`[VOLATILITY] Detected ${(spikePercentage * 100).toFixed(1)}% price spike on item!`);
-                }
-            }
-        }
-    }
-
-    return {
-        avgLow: floorPrice,
-        avgHigh: ceilingPrice,
-        opportunityBuyPrice,
-        opportunitySellPrice
-    };
-}
-
-/**
- * Gets the hourly volume from a timeseries dataset.
- */
-function getHourlyVolume(timeseries) {
-    if (!timeseries || timeseries.length === 0) return null;
-    const latestPoint = timeseries[timeseries.length - 1];
-    if (latestPoint && typeof latestPoint.highPriceVolume === 'number' && typeof latestPoint.lowPriceVolume === 'number') {
-        const fiveMinTotal = latestPoint.highPriceVolume + latestPoint.lowPriceVolume;
-        return fiveMinTotal * 12; // Estimate hourly volume
-    }
-    return null;
-}
-
-/**
- * Sorts by the more effective Potential Hourly Profit metric.
- */
-function sortByPotentialProfitDesc(a,b) {
-  return b.potentialHourlyProfit - a.potentialHourlyProfit;
-}
-
-
-// ================================================================================= //
-// SECTION 3: THE BEAGLE FLIPPER ANALYSIS ENGINE (UPGRADED P2P)
-// ================================================================================= //
-
-function analyzeItemWithBeagleModel(id, cashPerSlot, recentlyBoughtMap, marketData, apiCache) {
-    try {
-        const mapEntry = marketData.mapping.find(m => m.id === id);
-        if (!isValidItem(mapEntry)) return null;
-
-        const timeseries = apiCache.get(id); // Using pre-fetched timeseries data
-        if (!timeseries) return null;
-
-        const priceData = getPricesFromSnapshots(timeseries);
-        if (!priceData) return null;
-
-        const hourlyVolume = getHourlyVolume(timeseries);
-        if (!hourlyVolume || hourlyVolume < (TRADING_CONFIG.MINIMUM_5MIN_VOLUME * 12 / 5)) return null;
-
-        // Use opportunity pricing if volatility detected, otherwise use normal pricing
-        const buyPrice = priceData.opportunityBuyPrice
-            ? Math.floor(priceData.opportunityBuyPrice) + 1
-            : Math.floor(priceData.avgLow) + TRADING_CONFIG.BUY_PRICE_OFFSET_GP;
-
-        const sellPrice = priceData.opportunitySellPrice
-            ? Math.floor(priceData.opportunitySellPrice) - 1
-            : Math.floor(priceData.avgHigh) -1;
-
-        const marketSpread = sellPrice - buyPrice;
-        if (marketSpread < TRADING_CONFIG.MINIMUM_MARKET_SPREAD_GP) return null;
-        if (buyPrice > cashPerSlot) return null;
-
-        const profitAfterTaxes = Math.floor(sellPrice * (1 - TRADING_CONFIG.GE_TAX_RATE)) - buyPrice;
-        if (profitAfterTaxes < TRADING_CONFIG.MIN_PROFIT_PER_ITEM) return null;
-
-        const limitRemaining = mapEntry.limit - (recentlyBoughtMap.get(id) || 0);
-        if (limitRemaining <= 0) return null;
-
-        const quantity = calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining);
-        if (quantity <= 0) return null;
-
-        // The key metric from your successful script
-        const potentialHourlyProfit = profitAfterTaxes * hourlyVolume;
-
-        return {
-            id,
-            name: mapEntry.name,
-            price: buyPrice,
-            quantity,
-            profit: profitAfterTaxes,
-            potentialHourlyProfit,
-            reason: `Vol: ${hourlyVolume.toLocaleString()}/hr`
-        };
-    } catch (error) {
-        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.error(`[BEAGLE ENGINE] Error analyzing item ${id}:`, error);
-        }
-        return null;
-    }
-}
-
-
-// ================================================================================= //
-// SECTION 4: THE F2P LOGIC ENGINE (UPGRADED)
-// ================================================================================= //
-
-function analyzeItemForF2P(id, cashPerSlot, recentlyBoughtMap, marketData, apiCache) {
-    try {
-        const mapEntry = marketData.mapping.find(m => m.id === id);
-        if (!isValidItem(mapEntry)) return null;
-
-        const timeseries = apiCache.get(id);
-        if (!timeseries) return null;
-
-        const priceData = getPricesFromSnapshots(timeseries);
-        if (!priceData) return null;
-
-        const buyPrice = priceData.avgLow + 1;
-        const sellPrice = priceData.avgHigh - 1;
-
-        if (buyPrice > cashPerSlot || buyPrice >= sellPrice) return null;
-
-        const profitAfterTaxes = Math.floor(sellPrice * (1 - TRADING_CONFIG.GE_TAX_RATE)) - profitAfterTaxes;
-        if (profitAfterTaxes < TRADING_CONFIG.MIN_PROFIT_PER_ITEM) return null;
-
-        const limitRemaining = mapEntry.limit - (recentlyBoughtMap.get(id) || 0);
-        if (limitRemaining <= 0) return null;
-
-        const quantity = calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining);
-        if (quantity <= 0) return null;
-
-        const hourlyVolume = getHourlyVolume(timeseries) || 0;
-        const potentialHourlyProfit = profitAfterTaxes * hourlyVolume;
-
-        return { id, name: mapEntry.name, price: buyPrice, quantity, profit: profitAfterTaxes, potentialHourlyProfit, reason: "F2P Simple Flip" };
-    } catch (error) {
-        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.error(`[F2P ENGINE] Error analyzing F2P item ${id}:`, error);
-        }
-        return null;
-    }
-}
-
-
-// ================================================================================= //
-// SECTION 5: THE MASTER SUGGESTION FUNCTION (UPGRADED)
-// ================================================================================= //
-
-async function getHybridSuggestion(userState, db, displayName) {
-    try {
-        if (!userState || !db) return { type: 'wait', message: "Initializing..." };
-
-        await wikiApi.ensureMarketDataIsFresh();
-        const marketData = wikiApi.getMarketData();
-        if (!marketData || !marketData.mapping) return { type: 'wait', message: "Fetching market data..." };
-
-        const { blocked_items = [], inventory = [], offers = [], preferences = {} } = userState;
-        const isF2pMode = preferences.f2pOnlyMode || false;
-
-        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.log(`[MODE] Upgraded Engine running in ${isF2pMode ? 'F2P Mode' : 'P2P Mode'}.`);
-        }
-
-        const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
-        const excludedIds = new Set([...activeOfferItemIds, ...blocked_items.map(Number)]);
-
-        const itemPool = isF2pMode ? STAPLE_ITEMS_F2P : STAPLE_ITEMS_P2P;
-        const analysisFunction = isF2pMode ? analyzeItemForF2P : analyzeItemWithBeagleModel;
-
-        const allIdsToFetch = new Set([...activeOfferItemIds, ...inventory.map(i => i.id), ...Array.from(itemPool)]);
-
-        const apiCache = new Map();
-        const fetchPromises = Array.from(allIdsToFetch).map(async (id) => {
-            if (id === 995) return;
             const ts = await wikiApi.fetchTimeseriesForItem(id);
-            if (ts) apiCache.set(id, ts); // Cache the full timeseries for advanced analysis
-        });
-        await Promise.all(fetchPromises);
+            if (!ts) return null;
 
-        const completedOffer = offers.find(o => ['completed', 'partial'].includes(o.status) && o.collected_amount > 0);
-        if (completedOffer) {
-            return { type: 'collect', slot: completedOffer.slot, item_id: completedOffer.item_id, name: completedOffer.item_name, price: completedOffer.price, quantity: completedOffer.quantity };
-        }
+            const priceData = getPricesFromSnapshots(ts, TRADING_CONFIG);
+            if (!priceData) return null;
 
-        if (!isF2pMode && TRADING_CONFIG.ENABLE_BEAGLE_FLIPPER) {
-            for (const offer of offers) {
-                if (offer.status === 'buying') {
-                    const offerAgeMinutes = (Date.now() - new Date(offer.timestamp * 1000).getTime()) / 60000;
-                    if (offerAgeMinutes > TRADING_CONFIG.MAX_OFFER_LIFETIME_MINUTES) {
-                        return { type: 'abort', slot: offer.slot, item_id: offer.item_id, name: offer.item_name, price: offer.price, quantity: offer.quantity, reason: `Offer expired (> ${TRADING_CONFIG.MAX_OFFER_LIFETIME_MINUTES} mins).` };
-                    }
+            const hourlyVolume = getHourlyVolume(ts);
+            if (!hourlyVolume) return null;
+
+            // Use opportunity pricing if volatility detected, otherwise use normal pricing
+            const buyPrice = priceData.opportunityBuyPrice
+                ? Math.floor(priceData.opportunityBuyPrice) + 1
+                : Math.floor(priceData.avgLow) + 1;
+
+            const sellPrice = priceData.opportunitySellPrice
+                ? Math.floor(priceData.opportunitySellPrice) - 1
+                : Math.floor(priceData.avgHigh);
+
+            if (buyPrice > cashPerSlot) return null;
+            if (buyPrice < TRADING_CONFIG.MIN_ITEM_VALUE) return null;
+            if (!isProfitableSell(buyPrice, sellPrice, TRADING_CONFIG)) return null;
+
+            const limitRemaining = mapEntry.limit - (recentlyBoughtMap.get(id) || 0);
+            if (limitRemaining <= 0) {
+                if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+                    console.log(`[DEBUG] Item ${id} (${mapEntry.name}) REJECTED: Buy limit of ${mapEntry.limit} reached (already bought ${recentlyBoughtMap.get(id) || 0}).`);
                 }
+                return null;
             }
-        }
 
-        for (const item of inventory) {
-            if (item.id === 995 || excludedIds.has(item.id)) continue;
-            const timeseries = apiCache.get(item.id);
-            if (!timeseries) continue;
-            const priceData = getPricesFromSnapshots(timeseries);
-            if (priceData && priceData.avgHigh) {
-                const sellPrice = priceData.opportunitySellPrice ? priceData.opportunitySellPrice -1 : priceData.avgHigh - 1;
-                return { type: 'sell', item_id: item.id, name: item.name, price: sellPrice, quantity: item.amount };
+            const quantity = calcMaxBuyQuantity(cashPerSlot, buyPrice, limitRemaining);
+            if (quantity <= 0) return null;
+
+            const profit = Math.floor(sellPrice * (1 - TRADING_CONFIG.TAX_RATE)) - buyPrice;
+            const potentialHourlyProfit = profit * hourlyVolume;
+
+            return { id, name: mapEntry.name, price: buyPrice, quantity, profit, hourlyVolume, potentialHourlyProfit };
+        } catch (error) {
+            if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+                console.log(`[DEBUG] CRITICAL ERROR processing item ${id}:`, error.stack);
             }
+            return null;
         }
+    });
 
-        const emptySlots = offers.filter(o => o.status === 'empty');
-        if (emptySlots.length === 0) return { type: 'wait', message: 'No empty GE slots.' };
-
-        const cashAmount = inventory.find(i => i.id === 995)?.amount || 0;
-        if (cashAmount < TRADING_CONFIG.MIN_CASH_PER_SLOT) return { type: 'wait', message: 'Insufficient cash.' };
-        const cashPerSlot = Math.floor(cashAmount / emptySlots.length);
-
-        const recentlyBoughtMap = await getRecentlyBoughtQuantities(db, displayName);
-
-        const profitableFlips = Array.from(itemPool)
-            .map(id => {
-                if(excludedIds.has(id)) return null;
-                return analysisFunction(id, cashPerSlot, recentlyBoughtMap, marketData, apiCache);
-            })
-            .filter(Boolean);
-
-        if (profitableFlips.length === 0) return { type: 'wait', message: 'Scanning for opportunities...' };
-
-        // UPGRADED: Sorting by the superior metric
-        profitableFlips.sort(sortByPotentialProfitDesc);
-        const bestFlip = profitableFlips[0];
-
-        return { type: 'buy', item_id: bestFlip.id, name: bestFlip.name, price: bestFlip.price, quantity: bestFlip.quantity, reason: bestFlip.reason };
-
-    } catch (error) {
-        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.error("[MASTER_ENGINE] A top-level critical error occurred:", error);
-        }
-        return { type: 'wait', message: 'An unexpected error occurred.' };
-    }
+    const results = await Promise.all(promises);
+    return results.filter(Boolean); // Filter out any null results
 }
 
+// --- MAIN SCRIPT LOGIC ---
+async function getHybridSuggestion(userState, db, displayName) {
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        console.log('[DEBUG] Starting getHybridSuggestion');
+    }
 
-// ================================================================================= //
-// SECTION 6: MODULE EXPORTS
-// ================================================================================= //
+    if (!userState || !db) {
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log('[DEBUG] No userState or db connection.');
+        }
+        return { type: 'wait' };
+    }
+
+    // Use simple in-memory cache to prevent re-fetching the main mapping on every quick tick.
+    await wikiApi.ensureMarketDataIsFresh();
+    const marketData = wikiApi.getMarketData();
+    if (!marketData || !marketData.mapping) {
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log('[DEBUG] Waiting for market data fetch to complete...');
+        }
+        return { type: 'wait' };
+    }
+
+    const { inventory = [], offers = [] } = userState;
+    const activeOfferItemIds = new Set(offers.filter(o => o.status !== 'empty').map(o => o.item_id));
+
+    // --- STEP 1: Collect Completed Offers ---
+    const completedIndex = offers.findIndex(o => ['completed','partial'].includes(o.status) && o.collected_amount > 0);
+    if (completedIndex !== -1) {
+        // Return a complete suggestion object with empty strings for unused fields.
+        // This prevents the front-end from displaying "null".
+        return {
+            type: 'collect',
+            name: '', // Provide an empty name
+            message: '', // Provide an empty message
+            price: 0,
+            quantity: 0
+        };
+    }
+
+    // --- STEP 2: Sell Inventory (Skip if in SELL_ONLY_MODE is false) ---
+    if (!TRADING_CONFIG.SELL_ONLY_MODE) {
+        for (const item of inventory) {
+            if (item.id === 995 || activeOfferItemIds.has(item.id) || item.amount <= 0) continue;
+            const mapEntry = marketData.mapping.find(m => m.id === item.id);
+            if (!isValidItem(mapEntry)) continue;
+
+            const ts = await wikiApi.fetchTimeseriesForItem(item.id);
+            if (!ts) continue;
+
+            const priceData = getPricesFromSnapshots(ts, TRADING_CONFIG);
+            if (!priceData) continue;
+
+            // Use opportunity pricing for sells if available, otherwise normal pricing
+            const sellPrice = priceData.opportunitySellPrice
+                ? Math.floor(priceData.opportunitySellPrice) - 1
+                : Math.floor(priceData.avgHigh) - 1;
+            return { type: 'sell', item_id: item.id, name: mapEntry.name, price: sellPrice, quantity: item.amount };
+        }
+    }
+
+    // --- STEP 3: Check for GE Slots and Cash ---
+    const emptySlots = offers.filter(o => o.status === 'empty');
+    if (!emptySlots.length) {
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log('[DEBUG] No empty slots available');
+        }
+        return { type: 'wait' };
+    }
+
+    const cashAmount = inventory.find(i => i.id === 995)?.amount || 0;
+    if (cashAmount < TRADING_CONFIG.MIN_CASH_TOTAL) {
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log(`[DEBUG] Insufficient cash: ${cashAmount} (minimum required: ${TRADING_CONFIG.MIN_CASH_TOTAL})`);
+        }
+        return { type: 'wait' };
+    }
+    const cashPerSlot = Math.floor(cashAmount / emptySlots.length);
+
+    // --- STEP 4: Get Buy Limits & Active Slot Counts ---
+    const recentlyBoughtMap = await getRecentlyBoughtQuantities(db, displayName);
+
+    let lowVolumeActiveCount = 0;
+    // This loop is slow but necessary for accurate slot management.
+    for (const offer of offers.filter(o => o.status !== 'empty' && o.buy_sell === 'buy')) {
+        const ts = await wikiApi.fetchTimeseriesForItem(offer.item_id);
+        const hourlyVolume = getHourlyVolume(ts);
+        if (hourlyVolume && hourlyVolume < TRADING_CONFIG.HIGH_VOLUME_THRESHOLD) {
+            lowVolumeActiveCount++;
+        }
+    }
+
+    // --- STEP 5: PRIORITY SCAN (STAPLES-FIRST) using Parallel Processing ---
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        console.log('[DEBUG] Starting Priority Scan on staple items.');
+    }
+
+    // Get the appropriate item list based on F2P mode
+    const activeItemList = getActiveItemList(TRADING_CONFIG);
+    const notActiveStaples = Array.from(activeItemList).filter(id => !activeOfferItemIds.has(id));
+
+    if (notActiveStaples.length > 0) {
+        const stapleFlips = await analyzeItemBatch(notActiveStaples, cashPerSlot, recentlyBoughtMap, marketData);
+        if (stapleFlips.length > 0) {
+            const highVolStaples = stapleFlips.filter(flip => flip.hourlyVolume >= TRADING_CONFIG.HIGH_VOLUME_THRESHOLD);
+            if (highVolStaples.length > 0) {
+                highVolStaples.sort(sortByPotentialProfitDesc);
+                const best = highVolStaples[0];
+                if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+                    console.log(`[DEBUG] PRIORITY SUCCESS: Found staple flip for ${best.name}.`);
+                }
+                return { type: 'buy', item_id: best.id, name: best.name, price: best.price, quantity: best.quantity };
+            }
+        }
+    }
+
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        console.log('[DEBUG] Priority Scan Complete: No profitable staple items found. Proceeding to full scan.');
+    }
+
+    // --- STEP 6: FULL SCAN (FALLBACK) using Parallel Processing ---
+    const notActiveGeneral = Array.from(TARGET_COMMODITIES).filter(id => !activeOfferItemIds.has(id) && !activeItemList.has(id));
+    const flipsHighVol = [];
+    const flipsLowVol = [];
+
+    for (let i = 0; i < notActiveGeneral.length; i += TRADING_CONFIG.BATCH_SIZE) {
+        const batch = notActiveGeneral.slice(i, i + TRADING_CONFIG.BATCH_SIZE);
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log(`[DEBUG] Processing full scan batch ${Math.floor(i/TRADING_CONFIG.BATCH_SIZE) + 1}/${Math.ceil(notActiveGeneral.length/TRADING_CONFIG.BATCH_SIZE)}`);
+        }
+
+        const batchResults = await analyzeItemBatch(batch, cashPerSlot, recentlyBoughtMap, marketData);
+        for (const flip of batchResults) {
+            if (flip.hourlyVolume >= TRADING_CONFIG.HIGH_VOLUME_THRESHOLD) {
+                flipsHighVol.push(flip);
+            } else if (flip.hourlyVolume >= TRADING_CONFIG.LOW_VOLUME_THRESHOLD) {
+                flipsLowVol.push(flip);
+            }
+        }
+    }
+
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        console.log(`[DEBUG] Full Scan Complete: Found ${flipsHighVol.length} high volume flips, ${flipsLowVol.length} low volume flips`);
+    }
+
+    flipsHighVol.sort(sortByPotentialProfitDesc);
+    flipsLowVol.sort(sortByPotentialProfitDesc);
+
+    if (flipsHighVol.length) {
+        const best = flipsHighVol[0];
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log(`[DEBUG] Top high volume flip from full scan: ${best.name}`);
+        }
+        return { type: 'buy', item_id: best.id, name: best.name, price: best.price, quantity: best.quantity };
+    }
+
+    if (flipsLowVol.length && lowVolumeActiveCount < TRADING_CONFIG.MAX_LOW_VOLUME_ACTIVE) {
+        const bestLow = flipsLowVol[0];
+        if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+            console.log(`[DEBUG] Top low volume flip from full scan: ${bestLow.name}`);
+        }
+        return { type: 'buy', item_id: bestLow.id, name: bestLow.name, price: bestLow.price, quantity: bestLow.quantity };
+    }
+
+    if (TRADING_CONFIG.ENABLE_DEBUG_LOGGING) {
+        console.log('[DEBUG] No valid flips found in any category. Waiting.');
+    }
+    return { type: 'wait' };
+}
 
 module.exports = {
-    getHybridSuggestion
+    getHybridSuggestion,
 };
